@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VisionSync — Custom Model Training Dashboard</title>
+<link rel="stylesheet" href="/training/assets/styles.css" />
+</head>
+<body>
+<div class="app">
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark">🧠</span>
+      <div>
+        <h1>VisionSync Training Dashboard</h1>
+        <p class="brand-sub">Custom YOLOv8 Fine-Tuning Web UI · ကိုယ်ပိုင် dataset ဖြင့် model ပြန်လေ့လာခြင်း</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span id="statusBadge" class="badge badge-idle">အနားယူနေသည်</span>
+      <a href="/docs" target="_blank" class="link-btn">Swagger Docs ↗</a>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab is-active" data-tab="classic" role="tab" aria-selected="true">
+      <span class="tab-ico">🎯</span>
+      <span>သမားရိုးကျ Training</span>
+    </button>
+    <button class="tab" data-tab="master" role="tab" aria-selected="false">
+      <span class="tab-ico">🧩</span>
+      <span>Master Builder (ပစ္စည်းအသစ် + .pt ပေါင်းထည့်)</span>
+      <span id="masterBadge" class="tab-badge">✨ ဗဟုသုတ</span>
+    </button>
+  </nav>
+
+  <main class="layout">
+    <section class="col col-left">
+      <div class="tab-panel" data-panel="classic">
+        <div class="sub-grid">
+          <div class="sub-col">
+            <div class="card card-upload">
+              <div class="card-title">
+                <span>Dataset အား upload လုပ်ရန်</span>
+                <span class="card-hint">YOLOv8 format ဖြင့် export လုပ်ထားသော ZIP (Roboflow export)</span>
+              </div>
+              <form id="uploadForm" class="upload-form">
+                <label class="file-picker" for="zipFile">
+                  <input type="file" id="zipFile" accept=".zip" required />
+                  <span class="file-picker-icon">📦</span>
+                  <span id="zipFileName" class="file-picker-text">ZIP ဖိုင်ကိုရွေးပါ သို့မဟုတ် drag &amp; drop လုပ်ပါ</span>
+                </label>
+                <div class="row">
+                  <label class="field field-expand">
+                    <span>Dataset အမည်</span>
+                    <input type="text" id="datasetName" placeholder="ဥပမာ myanmar_objects" />
+                  </label>
+                  <button type="submit" class="btn btn-ghost" id="uploadBtn">Upload လုပ်မည်</button>
+                </div>
+                <div id="uploadMsg" class="inline-msg"></div>
+              </form>
+            </div>
+
+            <div class="card card-datasets">
+              <div class="card-title">
+                <span>ရရှိနိုင်သော Dataset များ</span>
+                <button class="btn btn-tiny" id="refreshDatasets">Refresh</button>
+              </div>
+              <div id="datasetsList" class="datasets-list">
+                <div class="muted">Loading datasets...</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="sub-col">
+            <div class="card card-config">
+              <div class="card-title">
+                <span>Training Configuration</span>
+              </div>
+              <div class="grid-config">
+                <label class="field">
+                  <span>Base Model</span>
+                  <select id="baseModel">
+                    <option value="yolov8n.pt">yolov8n.pt (nano, အလျင်မြန်ဆုံး)</option>
+                    <option value="yolov8s.pt">yolov8s.pt (small)</option>
+                    <option value="yolov8m.pt">yolov8m.pt (medium)</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Run Name</span>
+                  <input type="text" id="runName" value="visionsync_custom" />
+                </label>
+                <label class="field">
+                  <span>Epochs</span>
+                  <input type="number" id="epochs" value="50" min="1" max="500" step="1" />
+                </label>
+                <label class="field">
+                  <span>Image Size (imgsz)</span>
+                  <input type="number" id="imgSize" value="640" min="320" max="1280" step="32" />
+                </label>
+                <label class="field">
+                  <span>Batch Size</span>
+                  <input type="number" id="batchSize" value="16" min="1" max="128" step="1" />
+                </label>
+                <label class="field field-expand">
+                  <span>data.yaml Path (auto-fill)</span>
+                  <input type="text" id="dataYaml" placeholder="dataset/<name>/data.yaml" />
+                </label>
+              </div>
+
+              <div class="action-row">
+                <button id="startBtn" class="btn btn-primary">🚀 စတင်လေ့လာမည်</button>
+                <button id="stopBtn" class="btn btn-danger" disabled>⏹️ ရပ်ဆိုင်းမည်</button>
+              </div>
+            </div>
+
+            <div class="card card-status">
+              <div class="card-title">
+                <span>Training အခြေအနေ</span>
+                <span id="durationText" class="card-hint">00:00:00</span>
+              </div>
+              <div class="progress-wrap">
+                <div class="progress-bar" data-pct="0">
+                  <div id="progressFill" class="progress-fill"></div>
+                </div>
+              </div>
+              <div id="statusLine" class="status-line">ကျေးဇူးပြု၍ dataset တစ်ခုရွေးပြီး Start နှိပ်ပါ။</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== MASTER BUILDER TAB ===================== -->
+      <div class="tab-panel" data-panel="master" hidden>
+        <div class="sub-grid">
+          <div class="sub-col">
+            <div class="card card-master-info">
+              <div class="card-title">
+                <span>ဓာတ်မတည့်မှုမရှိဘဲ .pt ပေါင်းထည့်ခြင်း</span>
+                <span class="card-hint">မူလ ၈၀ မျိုးကို မမေ့စေပါ</span>
+              </div>
+              <ol class="steps-list">
+                <li><b>Zip</b> တစ်ခု Upload (Roboflow / YOLOv8 format)</li>
+                <li>ပစ္စည်းအသစ် <b>Class နာမည်</b> ရေးပေးပါ</li>
+                <li>မူလ .pt ဖိုင်ကို Base အဖြစ် <b>ရွေးပါ</b> (သို့မဟုတ် list မှရွေး)</li>
+                <li><b>Start Fine-Tune</b> နှိပ်ရုံသာ — nc, ID, YAML အားလုံး auto လုပ်ပေး</li>
+              </ol>
+            </div>
+
+            <div class="card card-upload">
+              <div class="card-title">
+                <span>(၁) ပစ္စည်းအသစ် dataset ZIP Upload</span>
+                <span class="card-hint">data.yaml / train / valid ပါဝင်ရန်</span>
+              </div>
+              <form id="mUploadForm" class="upload-form">
+                <label class="file-picker" for="mZipFile">
+                  <input type="file" id="mZipFile" accept=".zip" required />
+                  <span class="file-picker-icon">🆕</span>
+                  <span id="mZipFileName" class="file-picker-text">ပစ္စည်းအသစ် ZIP ကိုရွေးပါ</span>
+                </label>
+                <div class="row">
+                  <label class="field field-expand">
+                    <span>Dataset အမည် (စာမရှိရင် Auto)</span>
+                    <input type="text" id="mDatasetName" placeholder="ဥပမာ traffic_light_mm" />
+                  </label>
+                  <label class="field field-expand">
+                    <span>👑 Class နာမည်အသစ်</span>
+                    <input type="text" id="mClassName" placeholder="ဥပမာ traffic_light_yangon" required />
+                  </label>
+                </div>
+                <div class="row">
+                  <button type="submit" class="btn btn-ghost" id="mUploadBtn">1. Upload + Merge → Master</button>
+                  <button type="button" class="btn btn-tiny" id="mRefreshMasterBtn">🔄 Master စစ်ဆေး</button>
+                </div>
+                <div id="mUploadMsg" class="inline-msg"></div>
+              </form>
+            </div>
+
+            <div class="card card-master-state">
+              <div class="card-title">
+                <span>(၂) Master Dataset အခြေအနေ</span>
+                <span id="mMasterBadge" class="tab-badge tab-badge-dim">—</span>
+              </div>
+              <div id="mMasterInfo" class="muted">Loading...</div>
+            </div>
+          </div>
+
+          <div class="sub-col">
+            <div class="card card-config">
+              <div class="card-title">
+                <span>(၃) Continuous Fine-Tune စတင်ရန်</span>
+              </div>
+              <div class="grid-config">
+                <label class="field field-expand">
+                  <span>Base .pt ဖိုင် (မူလ ၈၀ မျိုး ပါသည့်ဖိုင်)</span>
+                  <select id="mBaseModel">
+                    <option value="">— Models Refresh နှိပ်ပါ —</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Run Name</span>
+                  <input type="text" id="mRunName" value="visionsync_master" />
+                </label>
+                <label class="field">
+                  <span>Epochs</span>
+                  <input type="number" id="mEpochs" value="20" min="5" max="100" step="1" />
+                </label>
+                <label class="field">
+                  <span>Image Size</span>
+                  <input type="number" id="mImgsz" value="640" min="320" max="1280" step="32" />
+                </label>
+                <label class="field">
+                  <span>Batch Size</span>
+                  <input type="number" id="mBatch" value="16" min="1" max="128" step="1" />
+                </label>
+                <label class="field">
+                  <span>Learning Rate (lr0)</span>
+                  <input type="number" id="mLr0" value="0.001" min="0.00005" max="0.01" step="0.00005" />
+                </label>
+              </div>
+              <div class="action-row">
+                <button id="mStartBtn" class="btn btn-primary">🧩 Start Continuous Fine-Tune</button>
+              </div>
+            </div>
+
+            <div class="card card-status">
+              <div class="card-title">
+                <span>Master Training အခြေအနေ</span>
+                <span id="mDurationText" class="card-hint">00:00:00</span>
+              </div>
+              <div class="progress-wrap">
+                <div class="progress-bar" data-pct="0">
+                  <div id="mProgressFill" class="progress-fill progress-fill-m"></div>
+                </div>
+              </div>
+              <div id="mStatusLine" class="status-line">အဆင့် (၁) Upload → (၂) Merge → (၃) Start လုပ်ပါ။</div>
+              <div id="mResultRow" class="m-result-row" hidden>
+                <div class="m-result-title">✅ ရလဒ် .pt ဖိုင်</div>
+                <div class="m-result-pt"><span id="mResultPt"></span></div>
+                <div class="m-result-actions">
+                  <button class="btn btn-tiny btn-success" id="mActivateBtn">Activate လုပ်မည်</button>
+                  <button class="btn btn-tiny" id="mDownloadBtn">⬇️ Download (.pt)</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="col col-right">
+      <div class="card card-logs">
+        <div class="card-title">
+          <span>Live Logs</span>
+          <div class="title-actions">
+            <label class="checkbox-inline">
+              <input type="checkbox" id="tailLogs" checked />
+              <span>Auto-scroll</span>
+            </label>
+            <button class="btn btn-tiny" id="clearLogsBtn">Clear</button>
+          </div>
+        </div>
+        <div id="logBox" class="log-box"></div>
+      </div>
+
+      <div class="card card-models">
+        <div class="card-title">
+          <span>Trained Model များ (.pt)</span>
+          <button class="btn btn-tiny" id="refreshModels">Refresh</button>
+        </div>
+        <div id="modelsList" class="models-list">
+          <div class="muted">Loading models...</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="/training/assets/app.js"></script>
+</body>
+</html>
