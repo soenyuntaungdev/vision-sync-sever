@@ -22,6 +22,22 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 
+def _main_globals() -> Dict[str, Any]:
+    """main.py module ၏ global namespace ကို runtime မှာ ရယူပေးသည်။"""
+    if "main" in sys.modules:
+        return sys.modules["main"].__dict__
+    import importlib
+    try:
+        mod = importlib.import_module("main")
+    except Exception:
+        try:
+            import __main__ as mod  # type: ignore
+        except Exception as e:
+            raise RuntimeError(f"main module မတွေ့ရှိပါ: {e}")
+    sys.modules.setdefault("main", mod)
+    return mod.__dict__
+
+
 class TrainingLogCapture(io.StringIO):
     def __init__(self, log_buffer: List[str]):
         super().__init__()
@@ -158,25 +174,64 @@ class TrainingManager:
         if not os.path.isfile(full):
             return {"ok": False, "error": f"Model file not found: {model_path}"}
         main_path = os.path.join(BACKEND_DIR, "main.py")
+        wrote_changes = False
         try:
             with open(main_path, "r", encoding="utf-8") as f:
                 content = f.read()
             import re
-            new_content = re.sub(
-                r'ObjectDetector\(model_name=["\']([^"\']+)["\']\)',
-                f'ObjectDetector(model_name="{model_path}")',
+            pattern = re.compile(
+                r'(ObjectDetector\s*\(\s*model_name\s*=\s*)(["\'])([^"\']+)(\2\s*\))',
+                re.IGNORECASE,
+            )
+            new_content, nsub = pattern.subn(
+                lambda m: f'{m.group(1)}{m.group(2)}{model_path}{m.group(4)}',
                 content,
             )
-            if new_content == content:
-                return {"ok": False, "error": "Could not find ObjectDetector line in main.py"}
-            with open(main_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-            return {
-                "ok": True,
-                "message": f"Activated {model_path}. Restart backend to load the new model.",
-            }
+            if nsub > 0 and new_content != content:
+                with open(main_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                wrote_changes = True
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": f"main.py update မအောင်မြင်ပါ: {e}"}
+
+        reloaded = False
+        reload_msg = ""
+        try:
+            import detector as _detector_mod
+            from detector import ObjectDetector
+            import importlib
+            importlib.reload(_detector_mod)
+            if "detector" in _main_globals():
+                prev = _main_globals()["detector"]
+                try:
+                    new_detector = ObjectDetector(model_name=full if not os.path.isabs(full) else full)
+                    new_detector = ObjectDetector(model_name=model_path)
+                    try:
+                        new_detector = ObjectDetector(model_name=full)
+                    except Exception:
+                        pass
+                except Exception:
+                    try:
+                        new_detector = ObjectDetector(model_name=model_path)
+                    except Exception as ee2:
+                        return {
+                            "ok": False,
+                            "error": f"New model load မအောင်မြင်ပါ: {ee2}",
+                        }
+                _main_globals()["detector"] = new_detector
+                reloaded = True
+                reload_msg = f' (Live reload: {getattr(prev, "model_name", "?")} → {new_detector.model_name}, fallback={new_detector.use_fallback})'
+        except Exception as ee:
+            reload_msg = f" (Live reload မအောင်မြင်၊ manual restart လိုပါမယ် — {ee})"
+
+        return {
+            "ok": True,
+            "message": (
+                f"Activated model: {model_path}"
+                + ("" if wrote_changes else " (main.py မှာ line မတွေ့လို့ live reload သာလုပ်ခဲ့ပါတယ်)")
+                + reload_msg
+            ),
+        }
 
     def extract_uploaded_zip(self, zip_filepath: str, dataset_name: str) -> Dict[str, Any]:
         target_dir = os.path.join(DATASET_DIR, dataset_name)
