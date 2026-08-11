@@ -384,32 +384,52 @@ def fixup_dataset(root: str, *, verbose: bool = True) -> Dict[str, Any]:
         cfg = _read_yaml_simple(yaml_path)
         updated = False
 
+        def _pick_split(split: str) -> str:
+            """root အောက်မှာရှိတဲ့ standard split folder ကိုရွေးပေးမယ်"""
+            alt = os.path.join(abs_root, "images", split)
+            if os.path.isdir(alt):
+                return alt
+            alt2 = os.path.join(abs_root, split)
+            return alt2 if os.path.isdir(alt2) else os.path.join(abs_root, "images", split)
+
+        def _is_abs_any_os(p: str) -> bool:
+            """Windows drive letter (E:/...) ကိုပါ absolute အဖြစ်သတ်မှတ်ပေးမယ်"""
+            if os.path.isabs(p):
+                return True
+            return re.match(r"^[A-Za-z]:[/\\]", p) is not None
+
         # path / train / val / test absolute ပြောင်း
         abs_root = root
         for k in ("train", "val", "test", "path"):
             v = cfg.get(k)
             if not isinstance(v, str) or not v:
                 continue
-            if os.path.isabs(v):
+            v_norm = v.replace("\\", "/")  # Windows backslashes → /
+            if _is_abs_any_os(v_norm):
+                # absolute/Windows path — လက်ရှိ machine မှာ တကယ်ရှိမရှိ စစ်ပြီး
+                cand = os.path.normpath(v_norm)
+                if os.path.isdir(cand):
+                    if k == "path" and cfg.get("path") != cand:
+                        cfg[k] = cand
+                        updated = True
+                    continue  # ရှိပြီးသား valid absolute — ထိန်းထား
+                # Stale path (ဥပမာ Windows path → Colab) — root layout နဲ့ ပြန်ဆက်
+                cfg[k] = abs_root if k == "path" else _pick_split(k)
+                result["fixed"].append(f"{k}: မရှိတော့တဲ့ absolute path ({v}) → {cfg[k]}")
+                updated = True
                 continue
             # relative ဖြစ်ရင် — root နဲ့ စသွားရင် abs လုပ်ပေးမယ်
-            cand = os.path.normpath(os.path.join(abs_root, v))
+            cand = os.path.normpath(os.path.join(abs_root, v_norm))
             # သို့သော် Roboflow `../train/images` ကဲ့သို့ ရောက်နိုင်သဖြင့် ရိုးရှင်းစွာ abs လုပ်မယ်
             if k == "path":
                 cfg[k] = abs_root
+            elif os.path.isdir(cand):
+                cfg[k] = cand
             else:
-                # k in train/val/test
-                if os.path.isdir(cand):
-                    cfg[k] = cand
-                else:
-                    # standard layout နဲ့ တွဲပေးမယ်
-                    split_map = {"train": "train", "val": "val", "test": "test"}
-                    s = split_map.get(k, k)
-                    alt = os.path.join(abs_root, "images", s)
-                    if os.path.isdir(alt):
-                        cfg[k] = alt
-                    else:
-                        cfg[k] = cand if cand else os.path.join(abs_root, "images", s)
+                # standard layout နဲ့ တွဲပေးမယ်
+                split_map = {"train": "train", "val": "val", "test": "test"}
+                s = split_map.get(k, k)
+                cfg[k] = _pick_split(s)
             updated = True
 
         # nc / names sync
@@ -450,9 +470,15 @@ def fixup_dataset(root: str, *, verbose: bool = True) -> Dict[str, Any]:
             cfg["path"] = abs_root
             updated = True
 
-        # test မရှိရင် ဖြည့်ပေးမယ်
+        # test မရှိရင် ဖြည့်ပေးမယ် (မရှိတဲ့ dir ကို မညွှန်ရ — val ကိုသာ fallback)
         if "test" not in cfg or not cfg["test"]:
-            cfg["test"] = os.path.join(abs_root, "images", "test")
+            test_p = os.path.join(abs_root, "images", "test")
+            if os.path.isdir(test_p):
+                cfg["test"] = test_p
+            elif os.path.isdir(os.path.join(abs_root, "images", "val")):
+                cfg["test"] = os.path.join(abs_root, "images", "val")
+            else:
+                cfg.pop("test", None)
             updated = True
 
         if updated:
@@ -496,6 +522,12 @@ def preflight_check_training(yaml_path: str) -> Dict[str, Any]:
         out["ok"] = False
         out["errors"].append(f"data.yaml မတွေ့ရှိပါ: {yaml_path}")
         return out
+    # စစ်ဆေးခြင်းမစမီ yaml paths များကို ဤ machine အတွက် auto ပြန်ပြင်ပေးမယ်
+    # (Windows absolute path ပါဝင်သော data.yaml ကို Colab/Linux မှာ run နိုင်ရန်)
+    try:
+        fixup_dataset(os.path.dirname(os.path.abspath(yaml_path)), verbose=False)
+    except Exception:
+        pass
     cfg = _read_yaml_simple(yaml_path)
     root = cfg.get("path") or os.path.dirname(os.path.abspath(yaml_path))
     out["info"]["yaml"] = yaml_path

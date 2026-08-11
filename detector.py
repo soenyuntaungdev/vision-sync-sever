@@ -125,6 +125,12 @@ class ObjectDetector:
                 detections = []
                 for result in results:
                     boxes = result.boxes
+                    # Custom-trained model (class names များသည် COCO/MODE filter နှင့် မဆိုင်လျှင်)
+                    # mode filter ကြောင့် အားလုံးပျောက်မသွားစေရန် filter ကို ဖွင့်ထားမည်
+                    if allowed_classes is not None and result.names:
+                        model_classes = set(result.names.values())
+                        if model_classes and not (model_classes & allowed_classes):
+                            allowed_classes = None
                     for box in boxes:
                         cls_id_num = int(box.cls[0].item())
                         cls_name = result.names.get(cls_id_num, f"class_{cls_id_num}")

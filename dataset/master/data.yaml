@@ -1,7 +1,7 @@
-path: "E:/VisionSync/backend/dataset/master"
-train: "E:/VisionSync/backend/dataset/master/images/train"
-val: "E:/VisionSync/backend/dataset/master/images/val"
-test: "E:/VisionSync/backend/dataset/master/images/test"
+path: "."
+train: images/train
+val: images/val
+test: images/test
 nc: 80
 names:
   0: person
