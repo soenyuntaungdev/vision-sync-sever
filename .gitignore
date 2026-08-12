@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+# Runtime artifacts — repo ထဲ မထည့်ရ
+active_model.json
+reports_log.json
+runs/
+models/
+uploads/
+
+# Dataset ပုံ/label များ (master/data.yaml ကိုတော့ ထားမည်)
+dataset/*/images/
+dataset/*/labels/

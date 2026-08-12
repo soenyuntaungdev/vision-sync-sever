@@ -169,8 +169,14 @@ def add_class_to_yaml(
 # ---------------------------------------------------------------------------
 # Public API 2 — Source dataset တစ်ခုကို master dataset ထဲ label shift ပြုလုပ်ပြီး merge
 # ---------------------------------------------------------------------------
-def _shift_label_file(label_path: str, out_path: str, offset: int,
-                     source_nc: int, valid_source_ids: Optional[set]) -> Tuple[int, int]:
+def _remap_label_file(label_path: str, out_path: str, id_map: Dict[int, int]) -> Tuple[int, int]:
+    """
+    Source label file တစ်ခုကို master ရဲ့ class ID များအဖြစ် ပြန် map လုပ်ပေးသည်။
+
+    id_map ထဲမှာ မပါသော source class ID များကို ချန်ထားခဲ့သည် (dropped)။
+    ယခင် code က `cid + offset` ဖြင့် shift လုပ်ခဲ့ရာ၊ source မှာ class တစ်ခုထက်
+    ပိုပါလျှင် master ရဲ့ nc ကို ကျော်လွန်သော ID များ ထွက်လာပြီး dataset ပျက်ခဲ့သည်။
+    """
     copied = 0
     dropped = 0
     with open(label_path, "r", encoding="utf-8") as f:
@@ -185,13 +191,10 @@ def _shift_label_file(label_path: str, out_path: str, offset: int,
             cid = int(parts[0])
         except Exception:
             continue
-        if valid_source_ids is not None and cid not in valid_source_ids:
+        if cid not in id_map:
             dropped += 1
             continue
-        if cid < 0 or cid >= source_nc:
-            dropped += 1
-            continue
-        parts[0] = str(cid + offset)
+        parts[0] = str(id_map[cid])
         new_lines.append(" ".join(parts) + "\n")
         copied += 1
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -205,22 +208,27 @@ def merge_dataset_into_master(
     source_root: str,
     new_class_name: str,
     source_class_ids: Optional[List[int]] = None,
+    merge_mode: str = "auto",
 ) -> Dict[str, Any]:
     """
     Roboflow export လုပ်ထားသော (သို့) တစ်မျိုးချင်းရရှိသည့် dataset အသစ်ကို
     master dataset ထဲသို့ အောက်ပါအတိုင်း merge လုပ်ပေးသည်။
 
-    ၁။ master ရဲ့ data.yaml ထဲသို့ new_class_name ကို အသစ်ထည့် (ရှိပြီးသား ဆိုရင် reuse)
-    ၂။ ထို class ရဲ့ ID ကို offset အဖြစ် ယူ
-    ၃။ source ရဲ့ label file (train/val) တိုင်းကို ID + offset လုပ်ပြီး master labels ထဲ ကူး
+    ၁။ source ရဲ့ class တစ်ခုချင်းစီအတွက် master ထဲက ID ကို ဆုံးဖြတ် (mapping ဆောက်)
+    ၂။ လိုအပ်သော class များကို master ရဲ့ data.yaml ထဲ ထည့် (ရှိပြီးသား ဆိုရင် reuse)
+    ၃။ source ရဲ့ label file (train/val) တိုင်းကို mapping အတိုင်း ပြန်ရေးပြီး master labels ထဲ ကူး
     ၄။ image files တွေကိုလည်း master images ထဲ ကူး (prefix ကို unique ID ဖြင့် ပူးတွဲ)
 
     Args:
         master_root:    Master dataset root (data.yaml ပါသည့် folder)
         source_root:    Source dataset root (ပုံများနှင့် labels ပါသည့် folder)
         new_class_name: Master ထဲသို့ထည့်မည့် (သို့) ရှိပြီးသားပြန်သုံးမည့် class နာမည်
-        source_class_ids: Source ထဲမှ ဤအမျိုးအစားများကိုသာ ယူမည် (None ဆိုရင် အားလုံး ကို ယူပြီး
-                            အားလုံးကို new_class_name တစ်ခုအဖြစ်သာ assign) — အများကြီးရှိရင် သတိပြုပါ
+        source_class_ids: Source ထဲမှ ဤအမျိုးအစားများကိုသာ ယူမည် (None = အားလုံး)
+        merge_mode:
+            "collapse"  — source ရဲ့ class အားလုံးကို new_class_name တစ်ခုတည်းအဖြစ် ပေါင်း
+            "per_class" — source ရဲ့ class နာမည်တစ်ခုချင်းစီကို master ထဲ သီးသန့်ထည့်
+            "auto"      — (default) class တစ်ခုတည်း ဒါမှမဟုတ် source_class_ids
+                          ရွေးထားရင် collapse၊ များနေရင် per_class
 
     Returns:
         Summary dict with counts
@@ -244,17 +252,45 @@ def merge_dataset_into_master(
     src_names = _normalize_names(src_data.get("names", {}))
     src_nc = int(src_data.get("nc", (max(src_names.keys()) + 1) if src_names else 0))
 
-    # ၂။ Master ထဲ class အသစ်ထည့် / reuse
-    add_result = add_class_to_yaml(master_yaml, new_class_name)
-    if not add_result["ok"]:
-        return {"ok": False, "message": add_result["message"]}
-    master_class_id = add_result["class_id"]
-    offset = master_class_id
-
-    # Source class filter ID set
-    valid_source_ids: Optional[set] = None
+    # ၂။ Source class → Master class ID mapping တည်ဆောက်
+    #    (ယခင်က `cid + offset` shift လုပ်ခဲ့လို့ source မှာ class များနေရင်
+    #     master ရဲ့ nc ကိုကျော်တဲ့ label ID တွေ ထွက်ပြီး dataset ပျက်ခဲ့သည်။)
+    candidate_ids: List[int] = sorted(src_names.keys()) if src_names else list(range(max(0, src_nc)))
     if source_class_ids:
-        valid_source_ids = set(source_class_ids)
+        wanted = set(source_class_ids)
+        candidate_ids = [i for i in candidate_ids if i in wanted]
+    if not candidate_ids:
+        return {"ok": False, "message": "Source dataset ထဲမှာ ယူစရာ class မတွေ့ရှိပါ။"}
+
+    mode = (merge_mode or "auto").lower()
+    if mode not in ("auto", "collapse", "per_class"):
+        return {"ok": False, "message": f"merge_mode မမှန်ပါ: {merge_mode}"}
+    if mode == "auto":
+        mode = "collapse" if (len(candidate_ids) <= 1 or source_class_ids) else "per_class"
+
+    id_map: Dict[int, int] = {}
+    added_classes: List[Dict[str, Any]] = []
+    if mode == "collapse":
+        add_result = add_class_to_yaml(master_yaml, new_class_name)
+        if not add_result["ok"]:
+            return {"ok": False, "message": add_result["message"]}
+        for i in candidate_ids:
+            id_map[i] = add_result["class_id"]
+        added_classes.append({"name": new_class_name, "id": add_result["class_id"],
+                              "already_exists": add_result["already_exists"]})
+    else:
+        for i in candidate_ids:
+            nm = (src_names.get(i) or "").strip() or f"{new_class_name}_{i}"
+            ar = add_class_to_yaml(master_yaml, nm)
+            if not ar["ok"]:
+                return {"ok": False, "message": ar["message"]}
+            id_map[i] = ar["class_id"]
+            added_classes.append({"name": nm, "id": ar["class_id"],
+                                  "already_exists": ar["already_exists"]})
+        add_result = {"class_id": added_classes[0]["id"],
+                      "total_nc": len(_normalize_names(_load_yaml(master_yaml).get("names", {}))),
+                      "already_exists": all(a["already_exists"] for a in added_classes)}
+    master_class_id = add_result["class_id"]
 
     # ၃။ Source ရဲ့ train/val folder တွေ ရှာ
     # Roboflow (A) — {split}/images/ pattern OR YOLOv8 (B) — images/{split}/ pattern နှစ်မျိုးလုံးကို စစ်မယ်
@@ -323,25 +359,34 @@ def merge_dataset_into_master(
             src_lbl = os.path.join(src_lbl_dir, stem + ".txt")
             dst_lbl = os.path.join(dst_lbl_dir, f"{run_tag}_{stem}.txt")
             if os.path.isfile(src_lbl):
-                c, d = _shift_label_file(src_lbl, dst_lbl, offset, src_nc, valid_source_ids)
+                c, d = _remap_label_file(src_lbl, dst_lbl, id_map)
                 total_labels += c
                 total_dropped += d
             else:
                 open(dst_lbl, "w", encoding="utf-8").close()
 
+    final_nc = len(_normalize_names(_load_yaml(master_yaml).get("names", {})))
+    if mode == "collapse":
+        cls_desc = f"Class '{new_class_name}' (ID {master_class_id})"
+    else:
+        cls_desc = "Class " + ", ".join(f"'{a['name']}'(ID {a['id']})" for a in added_classes)
+
     return {
         "ok": True,
         "class_id": master_class_id,
         "class_name": new_class_name,
-        "master_nc": add_result["total_nc"],
+        "merge_mode": mode,
+        "classes": added_classes,
+        "class_map": {str(k): v for k, v in sorted(id_map.items())},
+        "master_nc": final_nc,
         "already_exists": add_result["already_exists"],
         "merged_images": total_images,
         "merged_labels": total_labels,
         "dropped_label_rows": total_dropped,
         "message": (
-            f"အဆင်ပြေပါသည်။ Class '{new_class_name}' (ID {master_class_id}) အား "
+            f"အဆင်ပြေပါသည်။ {cls_desc} အား "
             f"images {total_images} ခု + labels {total_labels} rows ကို master dataset ထဲ merge ပြီးပါပြီ။ "
-            f"(total nc={add_result['total_nc']})"
+            f"(mode={mode}, total nc={final_nc})"
         ),
     }
 
@@ -355,7 +400,9 @@ class _LogForwarder(io.StringIO):
     def __init__(self, sink: Optional[Callable[[str], None]] = None):
         super().__init__()
         self._sink = sink
-        self._real = sys.stdout
+        # sys.stdout မဟုတ်ဘဲ sys.__stdout__ ကို သုံးသည် — capture တစ်ခုပေါ် နောက်တစ်ခု
+        # ထပ်တင်မိပြီး log တွေ နှစ်ခါထပ်ထွက်တာ (သို့) loop ဖြစ်တာ မဖြစ်စေရန်။
+        self._real = sys.__stdout__
 
     def write(self, s: str) -> int:
         if self._sink:
@@ -387,6 +434,7 @@ def continuous_finetune(
     batch: int = 16,
     lr0: float = 0.001,
     run_name: str = "visionsync_master",
+    freeze: int = 10,
     on_log: Optional[Callable[[str], None]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
@@ -395,6 +443,10 @@ def continuous_finetune(
     class အသစ်များပါသော master dataset ဖြင့် continuous fine-tune ပြုလုပ်သည်။
 
     - epochs 15-25 ၊ lr0=0.001 က Continuous အတွက် standard ပါ။
+    - freeze=10 → backbone ၁၀ layer ကို ခဲထားသည်။ ဒါမလုပ်ရင် ပစ္စည်းအသစ်
+      တစ်မျိုးတည်းသာပါသော dataset နဲ့ train လိုက်လျှင် model က မူလ COCO ၈၀ မျိုးကို
+      လုံးဝ မေ့သွားပြီး (catastrophic forgetting) ရလာသော .pt က မူလ yolov8n.pt ထက်
+      ဆိုးသွားတတ်သည်။
     - ရလဒ် best.pt ကို models/ folder ထဲတွင်လည်း backup ကူးသိမ်းသည်။
     - on_log(line): stdout/stderr စာကြောင်းတိုင်း forward ပေးသည်။
     - on_progress(epoch, total_epochs): epoch တိုင်းပြီးတိုင်း ခေါ်ပေးသည်။
@@ -408,9 +460,12 @@ def continuous_finetune(
 
     old_stdout = sys.stdout
     old_stderr = sys.stderr
+    cap_out = cap_err = None
     if on_log:
-        sys.stdout = _LogForwarder(on_log)
-        sys.stderr = _LogForwarder(on_log)
+        cap_out = _LogForwarder(on_log)
+        cap_err = _LogForwarder(on_log)
+        sys.stdout = cap_out
+        sys.stderr = cap_err
     try:
         return _continuous_finetune_inner(
             base_model_path=base_model_path,
@@ -420,11 +475,66 @@ def continuous_finetune(
             batch=batch,
             lr0=lr0,
             run_name=run_name,
+            freeze=freeze,
             on_progress=on_progress,
         )
     finally:
-        sys.stdout = old_stdout
-        sys.stderr = old_stderr
+        # တခြား job က ကြားဖြတ်ယူထားရင် မဖျက်မိစေရန် ကိုယ့်ဟာအတိုင်းမှသာ ပြန်ထားမည်
+        if cap_out is not None and sys.stdout is cap_out:
+            sys.stdout = old_stdout
+        if cap_err is not None and sys.stderr is cap_err:
+            sys.stderr = old_stderr
+
+
+def audit_master_coverage(data_yaml_path: str) -> Dict[str, Any]:
+    """
+    Master dataset ထဲမှာ class တစ်ခုချင်းစီအတွက် label ဘယ်နှစ်ခုရှိလဲ ရေတွက်ပြီး
+    "label လုံးဝမရှိသော class" များကို ပြန်ပေးသည်။
+
+    ဤ class များသည် fine-tune လုပ်ပြီးချိန်မှာ ပျောက်သွားမည့် class များဖြစ်သည်
+    (model က negative သာမြင်ရသဖြင့်)။
+    """
+    out: Dict[str, Any] = {"ok": False, "counts": {}, "empty_classes": [], "message": ""}
+    if not os.path.isfile(data_yaml_path):
+        out["message"] = f"data.yaml မတွေ့ရှိပါ: {data_yaml_path}"
+        return out
+    data = _load_yaml(data_yaml_path)
+    names = _normalize_names(data.get("names", {}))
+    root = data.get("path") or os.path.dirname(os.path.abspath(data_yaml_path))
+    if not os.path.isabs(root):
+        root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(data_yaml_path)), root))
+
+    counts: Dict[int, int] = {cid: 0 for cid in names}
+    for split in ("train", "val"):
+        lbl_dir = os.path.join(root, "labels", split)
+        if not os.path.isdir(lbl_dir):
+            continue
+        for fname in os.listdir(lbl_dir):
+            if not fname.endswith(".txt"):
+                continue
+            try:
+                with open(os.path.join(lbl_dir, fname), "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.split()
+                        if not parts:
+                            continue
+                        try:
+                            cid = int(parts[0])
+                        except Exception:
+                            continue
+                        counts[cid] = counts.get(cid, 0) + 1
+            except Exception:
+                continue
+
+    empty = [names[cid] for cid in sorted(names) if counts.get(cid, 0) == 0]
+    out["ok"] = True
+    out["counts"] = {names.get(cid, str(cid)): n for cid, n in sorted(counts.items())}
+    out["empty_classes"] = empty
+    out["message"] = (
+        f"Class {len(names)} ခုအနက် {len(empty)} ခုမှာ label လုံးဝမရှိပါ။"
+        if empty else f"Class {len(names)} ခုလုံးမှာ label ရှိပါသည်။"
+    )
+    return out
 
 
 def _continuous_finetune_inner(
@@ -435,6 +545,7 @@ def _continuous_finetune_inner(
     batch: int,
     lr0: float,
     run_name: str,
+    freeze: int = 10,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
     if not os.path.isfile(base_model_path):
@@ -461,11 +572,39 @@ def _continuous_finetune_inner(
     except Exception as e:
         return {"ok": False, "message": f"Preflight check error: {e}"}
 
+    # Base model ရဲ့ nc နှင့် dataset ရဲ့ nc မတူလျှင် Ultralytics က detection head အသစ်
+    # ပြန်တည်ဆောက်သည် — မူလ class weights အားလုံး ပျောက်သွားသည်။ ဒါကို ကြိုသိစေမည်။
+    try:
+        base_info = extract_model_info(base_model_path)
+        ds_cfg = _load_yaml(data_yaml_path)
+        ds_nc = int(ds_cfg.get("nc", 0) or 0)
+        base_nc = int(base_info.get("nc", 0) or 0) if base_info.get("ok") else 0
+        if base_nc and ds_nc and base_nc != ds_nc:
+            print(f"⚠️  Base model nc={base_nc} ဖြစ်ပြီး dataset nc={ds_nc} — မတူပါ။")
+            print("   Ultralytics က detection head ကို အသစ်ပြန်တည်ဆောက်မည်ဖြစ်၍ မူလ class")
+            print("   အားလုံးကို dataset ထဲက ပုံများဖြင့် ပြန်သင်ပေးရပါမည်။ Dataset ထဲမှာ")
+            print("   မူလ class များ၏ ပုံများ မပါလျှင် ထို class များ ပျောက်သွားပါလိမ့်မည်။")
+    except Exception:
+        pass
+
+    # Catastrophic forgetting သတိပေးချက် — label မရှိသော class များကို ကြိုပြောပြမည်
+    try:
+        audit = audit_master_coverage(data_yaml_path)
+        if audit.get("ok"):
+            empty = audit.get("empty_classes", [])
+            if empty:
+                print(f"⚠️  သတိပြုရန် — label လုံးဝမရှိသော class {len(empty)} ခု ရှိနေပါသည်။")
+                print(f"   ဥပမာ: {', '.join(empty[:12])}{' ...' if len(empty) > 12 else ''}")
+                print("   ဤ class များကို train ပြီးလျှင် model က မမှတ်မိတော့ပါ (catastrophic forgetting)။")
+                print(f"   ထို့ကြောင့် freeze={freeze} ဖြင့် backbone ကို ခဲထားပြီး train ပါမည်။")
+    except Exception:
+        pass
+
     print("=" * 70)
     print("🚀 Continuous Fine-Tuning စတင်နေပါသည်...")
     print(f"  Base Model:   {base_model_path}")
     print(f"  Dataset YAML: {data_yaml_path}")
-    print(f"  Epochs={epochs}, imgsz={imgsz}, batch={batch}, lr0={lr0}")
+    print(f"  Epochs={epochs}, imgsz={imgsz}, batch={batch}, lr0={lr0}, freeze={freeze}")
     print("=" * 70)
 
     import time
@@ -488,7 +627,7 @@ def _continuous_finetune_inner(
     except Exception:
         pass
 
-    results = model.train(
+    train_kwargs: Dict[str, Any] = dict(
         data=data_yaml_path,
         epochs=epochs,
         imgsz=imgsz,
@@ -498,6 +637,9 @@ def _continuous_finetune_inner(
         plots=True,
         project=RUNS_DIR,
     )
+    if freeze and int(freeze) > 0:
+        train_kwargs["freeze"] = int(freeze)
+    results = model.train(**train_kwargs)
 
     save_dir = getattr(results, "save_dir", None) or os.path.join(RUNS_DIR, run_name)
     best_pt = os.path.join(save_dir, "weights", "best.pt")
@@ -583,6 +725,8 @@ def _cli() -> None:
     p2.add_argument("--source", required=True, help="Source dataset root (data.yaml ပါသော folder)")
     p2.add_argument("--class-name", required=True, help="Master ထဲမှ class နာမည်")
     p2.add_argument("--source-ids", default=None, help="Source class IDs comma list (optional)")
+    p2.add_argument("--mode", default="auto", choices=["auto", "collapse", "per_class"],
+                    help="auto=အလိုအလျောက် | collapse=အားလုံးတစ်ခုတည်း | per_class=နာမည်တစ်ခုချင်း")
 
     p3 = sub.add_parser("finetune", help="Base .pt + master dataset ဖြင့် continuous fine-tune")
     p3.add_argument("--base", required=True, help="Base .pt ဖိုင်လမ်းကြောင်း")
@@ -591,6 +735,8 @@ def _cli() -> None:
     p3.add_argument("--imgsz", type=int, default=640)
     p3.add_argument("--batch", type=int, default=16)
     p3.add_argument("--lr0", type=float, default=0.001)
+    p3.add_argument("--freeze", type=int, default=10,
+                    help="Backbone layer ဘယ်နှစ်ခု ခဲထားမလဲ (0 = မခဲ)")
     p3.add_argument("--name", default="visionsync_master")
 
     p4 = sub.add_parser("model-info", help=".pt ဖိုင်ထဲရှိ classes / nc ပြပေးရန်")
@@ -608,7 +754,7 @@ def _cli() -> None:
             except Exception:
                 print("❌ --source-ids format မှားနေပါသည်။ ဥပမာ 0,1,2")
                 sys.exit(1)
-        res = merge_dataset_into_master(args.master, args.source, args.class_name, ids)
+        res = merge_dataset_into_master(args.master, args.source, args.class_name, ids, args.mode)
         print(json.dumps(res, ensure_ascii=False, indent=2))
     elif args.cmd == "finetune":
         res = continuous_finetune(
@@ -618,6 +764,7 @@ def _cli() -> None:
             imgsz=args.imgsz,
             batch=args.batch,
             lr0=args.lr0,
+            freeze=args.freeze,
             run_name=args.name,
         )
         print(json.dumps({k: (v if k != "names" else f"[{len(v)} items]")

@@ -16,6 +16,11 @@ RUNS_DIR = os.path.join(BACKEND_DIR, "runs", "detect")
 MODELS_DIR = os.path.join(BACKEND_DIR, "models")
 UPLOADS_DIR = os.path.join(BACKEND_DIR, "uploads")
 
+# Active model ကို source code (main.py) ထဲ ပြန်ရေးမည့်အစား ဤ JSON ထဲ မှတ်သည်။
+# Server restart / Colab cell ပြန် run လုပ်လည်း အသက်ဝင်နေစေရန်။
+ACTIVE_MODEL_FILE = os.path.join(BACKEND_DIR, "active_model.json")
+DEFAULT_MODEL = "yolov8n.pt"
+
 os.makedirs(DATASET_DIR, exist_ok=True)
 os.makedirs(RUNS_DIR, exist_ok=True)
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -23,37 +28,87 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 
 def _main_globals() -> Dict[str, Any]:
-    """main.py module ၏ global namespace ကို runtime မှာ ရယူပေးသည်။"""
-    if "main" in sys.modules:
-        return sys.modules["main"].__dict__
-    import importlib
+    """
+    တကယ် run နေသော main module ၏ global namespace ကို ရယူပေးသည်။
+
+    `uvicorn main:app` ဆိုရင် sys.modules["main"]၊ `python main.py` ဆိုရင်
+    sys.modules["__main__"] ဖြစ်သည်။ ဒီနှစ်ခုစလုံးမှာ `app` + `detector` ရှိတဲ့ဟာကို
+    ရွေးရမည်။ မဟုတ်ရင် main.py ကို ဒုတိယအကြိမ် import မိပြီး၊ တကယ် serve နေတဲ့
+    module မဟုတ်တဲ့ copy ထဲမှာ detector ကို လဲမိသွားလို့ live reload က
+    "ဖြစ်သွားပြီ" လို့ပြပေမယ့် ဘာမှမပြောင်းဘူး ဖြစ်တတ်သည်။
+    """
+    for key in ("main", "__main__"):
+        mod = sys.modules.get(key)
+        if mod is not None and hasattr(mod, "detector") and hasattr(mod, "app"):
+            return mod.__dict__
+    for key in ("main", "__main__"):
+        mod = sys.modules.get(key)
+        if mod is not None and hasattr(mod, "detector"):
+            return mod.__dict__
+    raise RuntimeError(
+        "Serve နေသော main module ကို မတွေ့ရှိပါ (detector global မရှိပါ)။ "
+        "Server ကို `uvicorn main:app` ဖြင့် run ထားကြောင်း စစ်ပါ။"
+    )
+
+
+def read_active_model() -> str:
+    """active_model.json ထဲက မှတ်ထားသော model path (မရှိရင် default) ကို ပြန်ပေးသည်။"""
     try:
-        mod = importlib.import_module("main")
+        import json
+        with open(ACTIVE_MODEL_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        path = str(data.get("model_path") or "").strip()
+        if not path:
+            return DEFAULT_MODEL
+        full = path if os.path.isabs(path) else os.path.join(BACKEND_DIR, path)
+        if os.path.isfile(full):
+            return full
+        # ဖိုင်ပျောက်နေရင် (ဥပမာ Colab session အသစ်) default ကို သုံးမည်
+        return DEFAULT_MODEL
     except Exception:
-        try:
-            import __main__ as mod  # type: ignore
-        except Exception as e:
-            raise RuntimeError(f"main module မတွေ့ရှိပါ: {e}")
-    sys.modules.setdefault("main", mod)
-    return mod.__dict__
+        return DEFAULT_MODEL
+
+
+def write_active_model(model_path: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    import json
+    payload: Dict[str, Any] = {"model_path": model_path, "updated_at": time.time()}
+    if extra:
+        payload.update(extra)
+    with open(ACTIVE_MODEL_FILE, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
 class TrainingLogCapture(io.StringIO):
+    """
+    Training log များကို buffer ထဲ စုသိမ်းပြီး တကယ့် console ကိုပါ ဆက်ပို့ပေးသည်။
+
+    (ယခင်က console ကို လုံးဝမပို့ခဲ့လို့ Colab မှာ training စတာနဲ့ uvicorn ရဲ့
+     output အားလုံး ပျောက်သွားခဲ့သည်။)
+    """
+
     def __init__(self, log_buffer: List[str]):
         super().__init__()
         self.log_buffer = log_buffer
-        self._stdout = sys.stdout
-        self._stderr = sys.stderr
+        self._stdout = sys.__stdout__
 
     def write(self, s: str) -> int:
         stripped = s.rstrip("\n")
         if stripped:
             self.log_buffer.append(stripped)
+        try:
+            if self._stdout:
+                self._stdout.write(s)
+                self._stdout.flush()
+        except Exception:
+            pass
         return len(s)
 
     def flush(self) -> None:
-        if self._stdout:
-            self._stdout.flush()
+        try:
+            if self._stdout:
+                self._stdout.flush()
+        except Exception:
+            pass
 
 
 class TrainingManager:
@@ -157,79 +212,90 @@ class TrainingManager:
         return sorted(models, key=lambda m: m["modified"], reverse=True)
 
     def current_model(self) -> Optional[str]:
-        detector_path = os.path.join(BACKEND_DIR, "main.py")
+        """လက်ရှိ serve နေသော detector ရဲ့ model path။ မရရင် မှတ်ထားတဲ့ JSON ကို ကြည့်မည်။"""
         try:
-            with open(detector_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            import re
-            m = re.search(r"ObjectDetector\(model_name=[\"']([^\"']+)[\"']\)", content)
-            if m:
-                return m.group(1)
+            det = _main_globals().get("detector")
+            name = getattr(det, "model_name", None)
+            if name:
+                return self._display_path(str(name))
         except Exception:
             pass
-        return None
+        return self._display_path(read_active_model())
+
+    @staticmethod
+    def _display_path(path: str) -> str:
+        """BACKEND_DIR အောက်က path ဆိုရင် relative အဖြစ် ပြပေးမည် (UI နှင့် ကိုက်ရန်)။"""
+        try:
+            if os.path.isabs(path):
+                rel = os.path.relpath(path, BACKEND_DIR)
+                if not rel.startswith(".."):
+                    return rel.replace("\\", "/")
+        except Exception:
+            pass
+        return path.replace("\\", "/")
 
     def activate_model(self, model_path: str) -> Dict[str, Any]:
-        full = os.path.join(BACKEND_DIR, model_path)
+        """
+        .pt ဖိုင်တစ်ခုကို လက်ရှိ detection model အဖြစ် တကယ် load လုပ်ပြီးမှ swap လုပ်သည်။
+
+        အရေးကြီးသည်မှာ — load မရလျှင် "ok" ဟု ဘယ်တော့မှ မပြန်ပါ။ (ယခင် code က
+        ObjectDetector ရဲ့ silent fallback ကြောင့် load မရလည်း အောင်မြင်ဟုပြပြီး
+        random fake detection တွေ ထုတ်နေခဲ့သည်။)
+        """
+        full = model_path if os.path.isabs(model_path) else os.path.join(BACKEND_DIR, model_path)
+        full = os.path.normpath(full)
         if not os.path.isfile(full):
             return {"ok": False, "error": f"Model file not found: {model_path}"}
-        main_path = os.path.join(BACKEND_DIR, "main.py")
-        wrote_changes = False
-        try:
-            with open(main_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            import re
-            pattern = re.compile(
-                r'(ObjectDetector\s*\(\s*model_name\s*=\s*)(["\'])([^"\']+)(\2\s*\))',
-                re.IGNORECASE,
-            )
-            new_content, nsub = pattern.subn(
-                lambda m: f'{m.group(1)}{m.group(2)}{model_path}{m.group(4)}',
-                content,
-            )
-            if nsub > 0 and new_content != content:
-                with open(main_path, "w", encoding="utf-8") as f:
-                    f.write(new_content)
-                wrote_changes = True
-        except Exception as e:
-            return {"ok": False, "error": f"main.py update မအောင်မြင်ပါ: {e}"}
+        if not full.lower().endswith(".pt"):
+            return {"ok": False, "error": f".pt ဖိုင်သာ activate လုပ်လို့ရပါသည်: {model_path}"}
 
-        reloaded = False
-        reload_msg = ""
+        # ၁။ အသစ်ကို strict mode နဲ့ load — မရရင် ဒီနေရာမှာပဲ ရပ်မယ်၊ အဟောင်းက ဆက်အလုပ်လုပ်နေမည်
         try:
-            import detector as _detector_mod
             from detector import ObjectDetector
-            import importlib
-            importlib.reload(_detector_mod)
-            if "detector" in _main_globals():
-                prev = _main_globals()["detector"]
-                try:
-                    new_detector = ObjectDetector(model_name=full if not os.path.isabs(full) else full)
-                    new_detector = ObjectDetector(model_name=model_path)
-                    try:
-                        new_detector = ObjectDetector(model_name=full)
-                    except Exception:
-                        pass
-                except Exception:
-                    try:
-                        new_detector = ObjectDetector(model_name=model_path)
-                    except Exception as ee2:
-                        return {
-                            "ok": False,
-                            "error": f"New model load မအောင်မြင်ပါ: {ee2}",
-                        }
-                _main_globals()["detector"] = new_detector
-                reloaded = True
-                reload_msg = f' (Live reload: {getattr(prev, "model_name", "?")} → {new_detector.model_name}, fallback={new_detector.use_fallback})'
-        except Exception as ee:
-            reload_msg = f" (Live reload မအောင်မြင်၊ manual restart လိုပါမယ် — {ee})"
+            new_detector = ObjectDetector(model_name=full, allow_fallback=False)
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": (
+                    f"Model load မအောင်မြင်ပါ ({type(e).__name__}): {e}. "
+                    "Ultralytics/torch version မကိုက်တာ (သို့) .pt ဖိုင် ပျက်နေတာ ဖြစ်နိုင်ပါသည်။"
+                ),
+            }
+        if new_detector.use_fallback or new_detector.model is None:
+            return {"ok": False, "error": f"Model load မအောင်မြင်ပါ: {new_detector.load_error}"}
+
+        # ၂။ Serve နေသော main module ထဲက detector ကို လဲမည်
+        try:
+            g = _main_globals()
+        except Exception as e:
+            return {"ok": False, "error": f"Live reload မအောင်မြင်ပါ: {e}"}
+        prev = g.get("detector")
+        prev_name = getattr(prev, "model_name", "?")
+        g["detector"] = new_detector
+
+        # ၃။ Restart လည်း အသက်ဝင်နေအောင် မှတ်ထားမည်
+        persisted = True
+        persist_err = ""
+        try:
+            write_active_model(
+                self._display_path(full),
+                {"nc": len(new_detector.class_names), "names": new_detector.class_names},
+            )
+        except Exception as e:
+            persisted = False
+            persist_err = str(e)
 
         return {
             "ok": True,
+            "model_path": self._display_path(full),
+            "nc": len(new_detector.class_names),
+            "names": new_detector.class_names,
+            "persisted": persisted,
             "message": (
-                f"Activated model: {model_path}"
-                + ("" if wrote_changes else " (main.py မှာ line မတွေ့လို့ live reload သာလုပ်ခဲ့ပါတယ်)")
-                + reload_msg
+                f"✅ Activated: {self._display_path(full)} "
+                f"(nc={len(new_detector.class_names)}, အရင်: {prev_name}) — "
+                "restart မလိုဘဲ ချက်ချင်း အသက်ဝင်ပါပြီ။"
+                + ("" if persisted else f" ⚠️ active_model.json သိမ်းမရပါ: {persist_err}")
             ),
         }
 
@@ -290,6 +356,9 @@ class TrainingManager:
         if self.status == "running":
             return {"ok": False, "error": "Training already in progress"}
 
+        if self.status == "stopping":
+            return {"ok": False, "error": "ရှေ့က training ရပ်နေဆဲပါ။ ခဏစောင့်ပါ။"}
+
         data_yaml_rel = config.get("data_yaml_path", "dataset/data.yaml")
         data_yaml_path = os.path.join(BACKEND_DIR, data_yaml_rel) if not os.path.isabs(data_yaml_rel) else data_yaml_rel
         if not os.path.isfile(data_yaml_path):
@@ -328,6 +397,7 @@ class TrainingManager:
             batch_size = int(cfg.get("batch_size", 16))
             base_model = cfg.get("base_model", "yolov8n.pt")
             run_name = cfg.get("run_name", "visionsync_custom")
+            freeze = cfg.get("freeze", None)
 
             log_capture = TrainingLogCapture(self.logs)
             old_stdout = sys.stdout
@@ -371,7 +441,7 @@ class TrainingManager:
                 except Exception:
                     pass
 
-                results = model.train(
+                train_kwargs: Dict[str, Any] = dict(
                     data=yaml_path,
                     epochs=epochs,
                     imgsz=img_size,
@@ -380,6 +450,10 @@ class TrainingManager:
                     plots=True,
                     project=os.path.join(BACKEND_DIR, "runs", "detect"),
                 )
+                if freeze is not None:
+                    train_kwargs["freeze"] = int(freeze)
+                    self.logs.append(f"  freeze = {int(freeze)} layers (backbone ကို ထိန်းထားမည်)")
+                results = model.train(**train_kwargs)
 
                 best_path = None
                 try:
@@ -411,8 +485,12 @@ class TrainingManager:
                 self.status = "failed"
             finally:
                 self.finished_at = time.time()
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
+                # တခြား job တစ်ခုက stdout ကို ကြားဖြတ်ယူထားရင် အဲဒါကို မဖျက်မိစေရန်
+                # ကိုယ့် capture object အတိုင်း ကျန်နေမှသာ ပြန်ထားမည်။
+                if sys.stdout is log_capture:
+                    sys.stdout = old_stdout
+                if sys.stderr is log_capture:
+                    sys.stderr = old_stderr
 
         self._thread = threading.Thread(target=runner, args=(config, data_yaml_path), daemon=True)
         self._thread.start()

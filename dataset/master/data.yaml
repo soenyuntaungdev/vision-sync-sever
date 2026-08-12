@@ -1,8 +1,8 @@
-path: "."
-train: images/train
-val: images/val
-test: images/test
-nc: 80
+path: "C:/OpenSourceProjects/vision-sync-sever/dataset/master"
+train: "C:/OpenSourceProjects/vision-sync-sever/dataset/master/images/train"
+val: "C:/OpenSourceProjects/vision-sync-sever/dataset/master/images/val"
+test: "C:/OpenSourceProjects/vision-sync-sever/dataset/master/images/test"
+nc: 82
 names:
   0: person
   1: bicycle
@@ -84,3 +84,5 @@ names:
   77: "teddy bear"
   78: "hair drier"
   79: toothbrush
+  80: myanmar_coin
+  81: traffic_light_mm

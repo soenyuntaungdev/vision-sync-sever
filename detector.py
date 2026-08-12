@@ -12,6 +12,23 @@ logging.basicConfig(level=logging.INFO)
 # far larger than this; the model downsamples to 640 internally anyway).
 MAX_INFER_DIM = 1280
 
+# COCO ၈၀ မျိုး၏ နာမည်များ။ MODE_CLASSES filter များကို ဤနာမည်များအပေါ်မှာ
+# အခြေခံရေးထားသဖြင့်၊ model တစ်ခုမှာ ဤစာရင်းထဲ မပါသော class (= custom class)
+# တွေ့ရင် mode filter က ဖြတ်မပစ်စေရန် သုံးသည်။
+COCO_CLASS_NAMES: Set[str] = {
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake",
+    "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop",
+    "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush",
+}
+
 # Mode filtering definitions matching constants/modes.ts in VisionSync app
 MODE_CLASSES: Dict[str, Optional[Set[str]]] = {
     "general": None,  # All classes
@@ -54,10 +71,16 @@ class ObjectDetector:
     detections if model weights are unavailable or if PyTorch/Ultralytics is absent.
     """
 
-    def __init__(self, model_name: str = "yolov8n.pt"):
+    def __init__(self, model_name: str = "yolov8n.pt", allow_fallback: bool = True):
         self.model_name = model_name
         self.model = None
         self.use_fallback = False
+        self.load_error: Optional[str] = None
+        self.class_names: List[str] = []
+        # allow_fallback=False ဆိုရင် model load မရလျှင် Exception ပစ်မည်။
+        # (Activate လုပ်ချိန်မှာ "အောင်မြင်တယ်" လို့ပြပြီး တကယ်တမ်း fake detection
+        #  ထုတ်နေတာမျိုး မဖြစ်စေရန် ဖြစ်သည်။)
+        self.allow_fallback = allow_fallback
         self._load_model()
 
     def _load_model(self):
@@ -65,10 +88,46 @@ class ObjectDetector:
             from ultralytics import YOLO
             logger.info(f"Loading YOLOv8 model: {self.model_name}...")
             self.model = YOLO(self.model_name)
-            logger.info("YOLOv8 model loaded successfully!")
+            names_attr = getattr(getattr(self.model, "model", None), "names", None)
+            if names_attr is None:
+                names_attr = getattr(self.model, "names", None)
+            if isinstance(names_attr, dict):
+                self.class_names = [str(names_attr[k]) for k in sorted(names_attr.keys())]
+            elif isinstance(names_attr, (list, tuple)):
+                self.class_names = [str(n) for n in names_attr]
+            logger.info(
+                f"YOLOv8 model loaded successfully! nc={len(self.class_names)} "
+                f"classes={self.class_names[:5]}{'...' if len(self.class_names) > 5 else ''}"
+            )
         except Exception as e:
+            self.load_error = f"{type(e).__name__}: {e}"
+            if not self.allow_fallback:
+                logger.error(f"Model load failed for '{self.model_name}': {self.load_error}")
+                raise
             logger.warning(f"Could not load Ultralytics YOLO model ({e}). Using smart fallback detector.")
             self.use_fallback = True
+
+    def _effective_allowed(self, mode: str, model_names: Optional[Set[str]]) -> Optional[Set[str]]:
+        """
+        Mode filter ကို လက်ရှိ model ရဲ့ class များနှင့် ကိုက်ညီအောင် တွက်ပေးသည်။
+
+        - mode == "general" → filter မရှိ (None)
+        - Custom training လုပ်ထားသော class (COCO ၈၀ ထဲ မပါသော နာမည်) မှန်သမျှကို
+          အမြဲ ခွင့်ပြုသည်။ ဒါမှသာ fine-tune လုပ်ပြီး ထည့်လိုက်တဲ့ class အသစ်ဟာ
+          security / industrial mode မှာ ပျောက်မသွားမည်။
+        - Model ရဲ့ class တွေထဲ mode စာရင်းနဲ့ လုံးဝ မဆိုင်ရင် filter ကို ပိတ်ပေးသည်။
+        """
+        base = MODE_CLASSES.get(mode, None)
+        if base is None:
+            return None
+        if not model_names:
+            return base
+        custom_names = model_names - COCO_CLASS_NAMES
+        allowed = set(base) | custom_names
+        if not (model_names & allowed):
+            # ဒီ model နဲ့ ဒီ mode လုံးဝမကိုက်ဘူး → အားလုံးပြပေးမယ် (ဘာမှမပေါ်တာထက် ကောင်းသည်)
+            return None
+        return allowed
 
     def decode_base64_image(self, base64_str: str) -> Optional[Image.Image]:
         """
@@ -104,7 +163,7 @@ class ObjectDetector:
         if img_w <= 0 or img_h <= 0:
             return []
 
-        allowed_classes = MODE_CLASSES.get(mode, None)
+        allowed_classes = self._effective_allowed(mode, set(self.class_names) if self.class_names else None)
 
         if not self.use_fallback and self.model is not None:
             try:
@@ -125,12 +184,10 @@ class ObjectDetector:
                 detections = []
                 for result in results:
                     boxes = result.boxes
-                    # Custom-trained model (class names များသည် COCO/MODE filter နှင့် မဆိုင်လျှင်)
-                    # mode filter ကြောင့် အားလုံးပျောက်မသွားစေရန် filter ကို ဖွင့်ထားမည်
-                    if allowed_classes is not None and result.names:
-                        model_classes = set(result.names.values())
-                        if model_classes and not (model_classes & allowed_classes):
-                            allowed_classes = None
+                    # Model ကို runtime မှာ swap လုပ်လိုက်တဲ့အခါ self.class_names က
+                    # ရှေ့ကတန်ဖိုးဖြစ်နေနိုင်လို့ result.names ကို အခြေခံပြီး ထပ်တွက်သည်။
+                    if result.names:
+                        allowed_classes = self._effective_allowed(mode, set(result.names.values()))
                     for box in boxes:
                         cls_id_num = int(box.cls[0].item())
                         cls_name = result.names.get(cls_id_num, f"class_{cls_id_num}")
@@ -162,15 +219,23 @@ class ObjectDetector:
                         })
                 return detections
             except Exception as e:
+                # Model တစ်ခု တကယ် load ဖြစ်နေပြီးမှ inference မှားတာဆိုရင်
+                # fake detection မထုတ်ဘဲ ဗလာပြန်ပေးမည်။ (fake data က mobile app ဘက်မှာ
+                # "model အလုပ်လုပ်နေတယ်" ဟု ထင်မှားစေသည်)
                 logger.error(f"YOLO detection error: {e}")
+                return []
 
-        # Fallback detector if YOLO is not available
+        # Fallback detector — model weights လုံးဝ မရှိမှသာ
         return self._fallback_detect(mode, allowed_classes)
 
     def _fallback_detect(self, mode: str, allowed_classes: Optional[Set[str]]) -> List[Dict[str, Any]]:
         """
         Fallback simulation generator when offline or without weights.
         """
+        logger.warning(
+            f"[FALLBACK] '{self.model_name}' ကို load မရသဖြင့် စမ်းသပ် (random) detection "
+            f"ထုတ်နေပါသည် — load_error={self.load_error}"
+        )
         pool = list(allowed_classes) if allowed_classes else ["chair", "person", "cell phone", "bottle", "laptop"]
         count = int(np.random.randint(1, 4))
         detections = []

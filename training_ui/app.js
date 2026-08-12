@@ -5,29 +5,15 @@
   const $ = (id) => document.getElementById(id);
 
   const statusBadge = $("statusBadge");
-  const statusLine = $("statusLine");
-  const durationText = $("durationText");
-  const progressFill = $("progressFill");
-  const startBtn = $("startBtn");
-  const stopBtn = $("stopBtn");
-  const datasetsListEl = $("datasetsList");
   const modelsListEl = $("modelsList");
   const logBox = $("logBox");
   const tailLogsCb = $("tailLogs");
-  const zipFileInput = $("zipFile");
-  const zipFileName = $("zipFileName");
-  const filePicker = document.querySelector(".tab-panel[data-panel=classic] .file-picker");
-  const uploadForm = $("uploadForm");
-  const uploadMsg = $("uploadMsg");
-  const uploadBtn = $("uploadBtn");
-  const datasetNameInput = $("datasetName");
-  const dataYamlInput = $("dataYaml");
 
-  let since = 0;
-  let startedAt = null;
-  let pollTimer = null;
-  let durationTimer = null;
-  let selectedDatasetYaml = null;
+  let mSince = 0;
+  let mStartedAt = null;
+  let mPollTimer = null;
+  let mDurationTimer = null;
+  let mLastStartedAt = null;
 
   // Master-specific elements
   const mZipFileInput = $("mZipFile");
@@ -41,6 +27,12 @@
   const mRefreshMasterBtn = $("mRefreshMasterBtn");
   const mMasterInfo = $("mMasterInfo");
   const mMasterBadge = $("mMasterBadge");
+  const mReplaySource = $("mReplaySource");
+  const mReplayPerClass = $("mReplayPerClass");
+  const mReplayBtn = $("mReplayBtn");
+  const mReplayRemoveBtn = $("mReplayRemoveBtn");
+  const mReplayBadge = $("mReplayBadge");
+  const mReplayMsg = $("mReplayMsg");
   const mBaseModel = $("mBaseModel");
   const mStartBtn = $("mStartBtn");
   const mProgressFill = $("mProgressFill");
@@ -50,21 +42,6 @@
   const mResultPt = $("mResultPt");
   const mActivateBtn = $("mActivateBtn");
   const mDownloadBtn = $("mDownloadBtn");
-
-  let mSince = 0;
-  let mStartedAt = null;
-  let mPollTimer = null;
-  let mDurationTimer = null;
-  let mLastStartedAt = null;
-
-  const STATUS_LABELS = {
-    idle: "အနားယူနေသည်",
-    running: "လေ့လာနေသည်…",
-    completed: "အောင်မြင်ပြီးပြီ",
-    failed: "အမှားဖြစ်နေသည်",
-    stopping: "ရပ်ဆိုင်းနေသည်…",
-    stopped: "ရပ်ပြီးသည်",
-  };
 
   const M_STATUS_LABELS = {
     idle: "အနားယူနေသည်",
@@ -123,10 +100,14 @@
   }
 
   function setStatus(s) {
-    statusBadge.textContent = STATUS_LABELS[s] || s;
-    statusBadge.className = "badge badge-" + (s || "idle");
-    startBtn.disabled = (s === "running" || s === "stopping");
-    stopBtn.disabled = (s !== "running" && s !== "stopping");
+    statusBadge.textContent = M_STATUS_LABELS[s] || s;
+    const cls = {
+      idle: "badge-idle",
+      running: "badge-running",
+      ok: "badge-completed",
+      error: "badge-failed",
+    }[s] || "badge-idle";
+    statusBadge.className = "badge " + cls;
   }
 
   function classifyLine(line) {
@@ -151,116 +132,6 @@
     logBox.appendChild(frag);
     if (tailLogsCb.checked) {
       logBox.scrollTop = logBox.scrollHeight;
-    }
-  }
-
-  function applyStatusState(st) {
-    setStatus(st.status);
-    const pct = Math.max(0, Math.min(100, Math.round(st.progress || 0)));
-    progressFill.style.width = pct + "%";
-    if (progressFill.parentElement && progressFill.parentElement.classList.contains("progress-bar")) {
-      progressFill.parentElement.dataset.pct = String(pct);
-    }
-    if (st.started_at) startedAt = st.started_at * 1000;
-    if (st.status === "running" || st.status === "stopping") {
-      if (!durationTimer) {
-        durationTimer = setInterval(() => {
-          const end = (st.finished_at ? st.finished_at * 1000 : Date.now());
-          durationText.textContent = fmtDuration(startedAt ? (end - startedAt) : 0);
-        }, 500);
-      }
-    } else {
-      if (durationTimer) { clearInterval(durationTimer); durationTimer = null; }
-      if (startedAt) {
-        const end = (st.finished_at ? st.finished_at * 1000 : startedAt);
-        durationText.textContent = fmtDuration(end - startedAt);
-      } else {
-        durationText.textContent = "00:00:00";
-      }
-    }
-
-    statusLine.classList.remove("has-result", "has-error");
-    if (st.status === "completed") {
-      statusLine.textContent = st.result_weights
-        ? "အောင်မြင်သည် — Best weights: " + st.result_weights
-        : "အောင်မြင်ပြီးပြီ (weights ရလဒ် မတွေ့ရပါ)";
-      statusLine.classList.add("has-result");
-    } else if (st.status === "failed") {
-      statusLine.textContent = "အမှားဖြစ်နေသည် — " + (st.error || "Logs ကိုကြည့်ပါ");
-      statusLine.classList.add("has-error");
-    } else if (st.status === "stopped") {
-      statusLine.textContent = "User က ရပ်ဆိုင်းထားသည်။";
-    } else if (st.status === "stopping") {
-      statusLine.textContent = "ရပ်ဆိုင်းနေသည်… ထိုက်တန်မှရပ်မည်။";
-    } else if (st.status === "running") {
-      statusLine.textContent = `Training လုပ်နေသည် · ${pct}% ပြီးစီး (သတိထားပါ — CPU/GPU ပေါ်မူတည်ပြီး ကြာနိုင်ပါသည်)`;
-    } else {
-      statusLine.textContent = "ကျေးဇူးပြု၍ dataset တစ်ခုရွေးပြီး Start နှိပ်ပါ။";
-    }
-  }
-
-  async function pollOnce() {
-    try {
-      const l = await api(`/training/logs?since=${encodeURIComponent(since)}`);
-      if (l && Array.isArray(l.logs) && l.logs.length) {
-        appendLogs(l.logs);
-        since = l.new_since;
-      }
-      const st = await api("/training/status");
-      applyStatusState(st);
-      if (st.status === "completed" || st.status === "failed" || st.status === "stopped") {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-        refreshModels();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(pollOnce, 1200);
-    pollOnce();
-  }
-
-  async function loadDatasets() {
-    datasetsListEl.innerHTML = '<div class="muted">Loading datasets...</div>';
-    try {
-      const data = await api("/training/datasets");
-      const list = data.datasets || [];
-      if (!list.length) {
-        datasetsListEl.innerHTML = '<div class="muted">Dataset မတွေ့ရပါ။ ZIP file upload လုပ်ပါ သို့မဟုတ် backend/dataset/ အောက်သို့ ကိုယ်တိုင်ထည့်ပါ။</div>';
-        selectedDatasetYaml = null;
-        return;
-      }
-      datasetsListEl.innerHTML = "";
-      list.forEach((d, i) => {
-        const row = document.createElement("label");
-        row.className = "dataset-item";
-        if (selectedDatasetYaml === d.yaml_path) row.classList.add("active");
-        row.innerHTML = `
-          <input type="radio" name="ds" value="${escapeAttr(d.yaml_path)}" ${selectedDatasetYaml === d.yaml_path ? "checked" : ""} />
-          <div class="dataset-info">
-            <div class="dataset-name" data-full-name="${escapeAttr(d.name)}" title="${escapeAttr(d.name)}">${escapeHtml(d.name)}</div>
-            <div class="dataset-meta" title="${escapeAttr(d.yaml_path)}">yaml: ${escapeHtml(d.yaml_path)} · Classes: ${d.class_count < 0 ? "?" : d.class_count}</div>
-          </div>
-        `;
-        const radio = row.querySelector("input");
-        radio.addEventListener("change", () => {
-          document.querySelectorAll(".dataset-item").forEach((el) => el.classList.remove("active"));
-          row.classList.add("active");
-          selectedDatasetYaml = d.yaml_path;
-          dataYamlInput.value = d.yaml_path;
-          if (!datasetNameInput.value) datasetNameInput.value = d.name;
-        });
-        datasetsListEl.appendChild(row);
-        if (i === 0 && !selectedDatasetYaml) {
-          radio.checked = true;
-          radio.dispatchEvent(new Event("change"));
-        }
-      });
-    } catch (e) {
-      datasetsListEl.innerHTML = `<div class="muted">Failed to load datasets: ${escapeHtml(e.message)}</div>`;
     }
   }
 
@@ -331,7 +202,7 @@
         const btn = row.querySelector("button");
         if (!isActive) {
           btn.addEventListener("click", async () => {
-            if (!confirm(`"${m.name}" ကို active model အဖြစ်သတ်မှတ်မှာသေချာပါသလား? Backend ကို restart လုပ်ရပါမည်။`)) return;
+            if (!confirm(`"${m.name}" ကို active model အဖြစ် သတ်မှတ်မှာ သေချာပါသလား?`)) return;
             try {
               btn.disabled = true;
               const r = await api("/training/activate-model", {
@@ -339,10 +210,10 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ model_path: m.path }),
               });
-              setMsg(uploadMsg, r.message || "Activate ဖြစ်သွားပြီ။ Backend restart လုပ်ပြီးမှ load လုပ်မည်။", "ok");
+              setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပါပြီ။", "ok");
               setTimeout(refreshModels, 300);
             } catch (e) {
-              setMsg(uploadMsg, "Activate မအောင်မြင် — " + e.message, "err");
+              setMsg(mUploadMsg, "Activate မအောင်မြင် — " + e.message, "err");
             } finally {
               btn.disabled = false;
             }
@@ -352,66 +223,6 @@
       });
     } catch (e) {
       modelsListEl.innerHTML = `<div class="muted">Failed to load models: ${escapeHtml(e.message)}</div>`;
-    }
-  }
-
-  async function startTraining() {
-    const data_yaml_path = dataYamlInput.value.trim();
-    if (!data_yaml_path) {
-      setMsg(uploadMsg, "data.yaml path ထည့်ပါ သို့မဟုတ် dataset တစ်ခုရွေးပါ", "err");
-      return;
-    }
-    const payload = {
-      data_yaml_path,
-      base_model: $("baseModel").value,
-      epochs: Number($("epochs").value),
-      img_size: Number($("imgSize").value),
-      batch_size: Number($("batchSize").value),
-      run_name: $("runName").value.trim() || "visionsync_custom",
-    };
-    try {
-      startBtn.disabled = true;
-      setMsg(uploadMsg, "Training စတင်နေသည်...", "ok");
-      logBox.innerHTML = "";
-      since = 0;
-      const r = await api("/training/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      setMsg(uploadMsg, r.message || "Started", "ok");
-      startPolling();
-    } catch (e) {
-      setMsg(uploadMsg, "Start မအောင်မြင် — " + e.message, "err");
-      startBtn.disabled = false;
-    }
-  }
-
-  async function stopTraining() {
-    if (!confirm("Training ကို ရပ်ဆိုင်းမှာ သေချာပါသလား?")) return;
-    try {
-      stopBtn.disabled = true;
-      const r = await api("/training/stop", { method: "POST", headers: { "Content-Type": "application/json" } });
-      setMsg(uploadMsg, r.message || "Stop signal ပို့ပြီးပြီ", "ok");
-      setTimeout(pollOnce, 500);
-    } catch (e) {
-      setMsg(uploadMsg, "Stop မအောင်မြင် — " + e.message, "err");
-      stopBtn.disabled = false;
-    }
-  }
-
-  function onPickZip(e) {
-    const f = e.target.files && e.target.files[0];
-    if (f) {
-      zipFileName.textContent = f.name + " · " + fmtKB(f.size / 1024);
-      filePicker.classList.add("has-file");
-      if (!datasetNameInput.value) {
-        datasetNameInput.value = smartDatasetNameFromZip(f.name);
-        datasetNameInput.title = datasetNameInput.value;
-      }
-    } else {
-      zipFileName.textContent = "ZIP ဖိုင်ကိုရွေးပါ သို့မဟုတ် drag & drop လုပ်ပါ";
-      filePicker.classList.remove("has-file");
     }
   }
 
@@ -580,81 +391,168 @@
     });
   }
 
-  async function onUpload(e) {
-    e.preventDefault();
-    const f = zipFileInput.files && zipFileInput.files[0];
-    if (!f) { setMsg(uploadMsg, "ZIP ဖိုင်ကိုရွေးပါ", "err"); return; }
-    const fd = new FormData();
-    fd.append("file", f);
-    if (datasetNameInput.value.trim()) fd.append("dataset_name", datasetNameInput.value.trim());
-    try {
-      uploadBtn.disabled = true;
-      uploadBtn.textContent = "Upload နေသည်...";
-      setMsg(uploadMsg, "Upload + Extract လုပ်နေသည်...", "ok");
-      const r = await api("/training/upload-dataset", { method: "POST", body: fd });
-      setMsg(uploadMsg, (r.ok ? "အောင်မြင်သည်" : "") + " · " + (r.dataset ? "Dataset တွေ့ရှိသည်" : "") + " · " + (r.hint || ""), r.ok ? "ok" : "err");
-      if (r.dataset && r.dataset.yaml_path) {
-        selectedDatasetYaml = r.dataset.yaml_path;
-        dataYamlInput.value = r.dataset.yaml_path;
-      }
-      await loadDatasets();
-      zipFileInput.value = "";
-      onPickZip({ target: zipFileInput });
-    } catch (e) {
-      setMsg(uploadMsg, "Upload မအောင်မြင် — " + e.message, "err");
-    } finally {
-      uploadBtn.disabled = false;
-      uploadBtn.textContent = "Upload လုပ်မည်";
-    }
-  }
+  // ---------------------------------------------------------------------
+  // Master — Master info refresh, Upload+Merge, start fine-tune,
+  //          polling, activate+download
+  // ---------------------------------------------------------------------
+  // ---- Stepper ----
+  const mStep = { replay: false, newClass: false, training: false, result: false };
 
-  // ---------------------------------------------------------------------
-  // Master tab — Tab switching, Upload+Merge, Master info refresh,
-  //              start fine-tune, polling, activate+download
-  // ---------------------------------------------------------------------
-  function switchTab(name) {
-    document.querySelectorAll(".tab").forEach((t) => {
-      const on = t.dataset.tab === name;
-      t.classList.toggle("is-active", on);
-      t.setAttribute("aria-selected", on ? "true" : "false");
-    });
-    document.querySelectorAll(".tab-panel").forEach((p) => {
-      p.hidden = p.dataset.panel !== name;
+  function updateStepper() {
+    const states = [
+      mStep.replay ? "is-done" : "is-active",
+      mStep.newClass ? "is-done" : (mStep.replay ? "is-active" : ""),
+      mStep.result ? "is-done" : (mStep.training ? "is-active" : (mStep.newClass ? "is-active" : "")),
+      mStep.result ? "is-active" : "",
+    ];
+    document.querySelectorAll("#mStepper .step").forEach((el, i) => {
+      el.classList.remove("is-done", "is-active");
+      if (states[i]) el.classList.add(states[i]);
     });
   }
 
   async function loadMasterInfo() {
     try {
       const info = await api("/master/info");
-      mMasterBadge.textContent = `nc=${info.nc}`;
-      mMasterBadge.classList.remove("tab-badge-dim");
+      const audit = await api("/master/audit").catch(() => null);
+
       const tr = info.images_train || 0;
       const vl = info.images_val || 0;
       const names = info.names || [];
-      const newest = names.length > 80 ? names.slice(80) : names.slice(Math.max(0, names.length - 15));
+      const newClasses = names.filter((c) => c.id >= 80);
+      const emptyCount = audit && Array.isArray(audit.empty_classes) ? audit.empty_classes.length : null;
+
+      mStep.newClass = newClasses.length > 0;
+      updateStepper();
+
+      mMasterBadge.textContent = `nc=${info.nc}`;
+      mMasterBadge.classList.remove("tab-badge-dim");
+
+      // label မရှိသော class များ = fine-tune ပြီးရင် ပျောက်သွားမည့် class များ
+      let emptyCls = "is-ok", emptyTxt = "—";
+      if (emptyCount !== null) {
+        emptyTxt = String(emptyCount);
+        emptyCls = emptyCount === 0 ? "is-ok" : (emptyCount > 40 ? "is-warn" : "");
+      }
 
       let html = `
-        <div class="m-master-info-grid">
-          <div><span class="m-k">Total Classes (nc)</span><div class="m-v">${info.nc}</div></div>
-          <div><span class="m-k">Images</span><div class="m-v">train ${tr} · val ${vl}</div></div>
-          <div><span class="m-k">YAML Path</span><div class="m-v">${escapeHtml(info.yaml_path)}</div></div>
-          <div><span class="m-k">Master Dir</span><div class="m-v">${escapeHtml(info.master_dir)}</div></div>
+        <div class="m-stat-strip">
+          <div class="m-stat">
+            <span class="m-stat-k">Total Classes</span>
+            <span class="m-stat-v">${info.nc}
+              <span class="m-stat-sub">${newClasses.length ? `+${newClasses.length} အသစ်` : ""}</span>
+            </span>
+          </div>
+          <div class="m-stat">
+            <span class="m-stat-k">Images</span>
+            <span class="m-stat-v">${tr + vl}
+              <span class="m-stat-sub">${tr}/${vl}</span>
+            </span>
+          </div>
+          <div class="m-stat">
+            <span class="m-stat-k">Label မရှိသော class</span>
+            <span class="m-stat-v ${emptyCls}">${emptyTxt}</span>
+          </div>
         </div>
-        <div class="m-master-class-tags">
       `;
-      if (names.length > 80) {
-        html += `<span class="m-class-chip">0-79 · COCO 80 မျိုး</span>`;
+
+      if (emptyCount !== null && emptyCount > 40) {
+        html += `<p class="card-note"><b class="note-warn">သတိပြုရန်</b> — class ${emptyCount} ခုမှာ label မရှိပါ။
+                 ဒီအတိုင်း train ရင် အဲဒီ class တွေ ပျောက်သွားပါမည်။ အဆင့် ၁ (COCO Replay) ကို အရင်လုပ်ပါ။</p>`;
       }
-      newest.forEach((c) => {
-        const isNew = c.id >= 80;
-        html += `<span class="m-class-chip ${isNew ? "m-new" : ""}">${c.id}: ${escapeHtml(c.name)}</span>`;
+
+      html += `<div class="m-master-class-tags">`;
+      if (names.length > 80) html += `<span class="m-class-chip">0–79 · COCO ၈၀ မျိုး</span>`;
+      const shown = newClasses.length ? newClasses : names.slice(Math.max(0, names.length - 10));
+      shown.forEach((c) => {
+        const n = audit && audit.counts ? audit.counts[c.name] : undefined;
+        const cnt = n === undefined ? "" : ` · ${n}`;
+        html += `<span class="m-class-chip ${c.id >= 80 ? "m-new" : ""}">${c.id}: ${escapeHtml(c.name)}${cnt}</span>`;
       });
       html += `</div>`;
+      html += `<div class="m-path-line" title="${escapeAttr(info.yaml_path)}">${escapeHtml(info.yaml_path)}</div>`;
       mMasterInfo.innerHTML = html;
     } catch (e) {
       mMasterInfo.textContent = "Master info မရနိုင်ပါ — " + e.message;
       mMasterBadge.textContent = "error";
       mMasterBadge.classList.remove("tab-badge-dim");
+    }
+  }
+
+  // ---- COCO Replay (အဟောင်း ၈၀ မျိုး မပျောက်စေရန်) ----
+  let mReplayPollTimer = null;
+
+  function applyReplayState(st) {
+    const info = st.info || {};
+    if (st.status === "running") {
+      mReplayBadge.textContent = "ထည့်နေသည်...";
+      mReplayBadge.classList.remove("tab-badge-dim");
+      setMsg(mReplayMsg, st.message || "လုပ်ဆောင်နေသည်...", "ok");
+      mReplayBtn.disabled = true;
+      return;
+    }
+    mReplayBtn.disabled = false;
+    if (info.present) {
+      mReplayBadge.textContent = `${info.source} · ${(info.images_train || 0) + (info.images_val || 0)} ပုံ`;
+      mReplayBadge.classList.remove("tab-badge-dim");
+    } else {
+      mReplayBadge.textContent = "မထည့်ရသေး";
+      mReplayBadge.classList.add("tab-badge-dim");
+    }
+    mStep.replay = !!info.present;
+    updateStepper();
+    if (st.status === "ok") setMsg(mReplayMsg, st.message || "ပြီးပါပြီ။", "ok");
+    else if (st.status === "error") setMsg(mReplayMsg, "မအောင်မြင် — " + (st.message || ""), "err");
+  }
+
+  async function pollReplayOnce() {
+    try {
+      const st = await api("/master/replay-status");
+      if (Array.isArray(st.progress_logs) && st.progress_logs.length) {
+        setMsg(mReplayMsg, st.progress_logs[st.progress_logs.length - 1], "ok");
+      }
+      applyReplayState(st);
+      if (st.status !== "running") {
+        if (mReplayPollTimer) { clearInterval(mReplayPollTimer); mReplayPollTimer = null; }
+        loadMasterInfo();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function onReplayAdd() {
+    const source = mReplaySource.value;
+    const per_class = Number(mReplayPerClass.value) || 30;
+    const warn = source === "val2017"
+      ? "\n\nval2017 က ~၈၀၀MB download လုပ်ပါမည် (ပထမတစ်ခါသာ)။"
+      : "";
+    if (!confirm(`COCO replay (${source}) ကို master ထဲ ထည့်မှာ သေချာပါသလား?${warn}`)) return;
+    try {
+      mReplayBtn.disabled = true;
+      const r = await api("/master/add-coco-replay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, per_class }),
+      });
+      setMsg(mReplayMsg, r.message || "စတင်လိုက်ပါပြီ။", "ok");
+      if (!mReplayPollTimer) mReplayPollTimer = setInterval(pollReplayOnce, 2000);
+      pollReplayOnce();
+    } catch (e) {
+      setMsg(mReplayMsg, "မအောင်မြင် — " + e.message, "err");
+      mReplayBtn.disabled = false;
+    }
+  }
+
+  async function onReplayRemove() {
+    if (!confirm("Master ထဲက COCO replay ပုံများကို ဖျက်မှာ သေချာပါသလား?")) return;
+    try {
+      const r = await api("/master/coco-replay", { method: "DELETE" });
+      setMsg(mReplayMsg, r.message || "ဖျက်ပြီးပါပြီ။", "ok");
+      await pollReplayOnce();
+      await loadMasterInfo();
+    } catch (e) {
+      setMsg(mReplayMsg, "ဖျက်လို့မရပါ — " + e.message, "err");
     }
   }
 
@@ -691,6 +589,7 @@
   function applyMasterStatus(st) {
     const s = st.status || "idle";
     const label = M_STATUS_LABELS[s] || s;
+    setStatus(s);
     let pct = 0;
     if (s === "ok") pct = 100;
     else if (s === "running") pct = Math.max(0, Math.min(100, Math.round(st.progress || 0)));
@@ -727,6 +626,10 @@
         mStatusLine.textContent = "အဆင့် (၁) Upload → (၂) Merge → (၃) Start လုပ်ပါ။";
       }
     }
+
+    mStep.training = s === "running";
+    mStep.result = s === "ok" && !!st.best_pt;
+    updateStepper();
 
     if (s === "ok" && st.best_pt) {
       mResultRow.hidden = false;
@@ -807,6 +710,7 @@
       imgsz: Number($("mImgsz").value),
       batch: Number($("mBatch").value),
       lr0: Number($("mLr0").value),
+      freeze: Number($("mFreeze").value),
     };
 
     try {
@@ -840,7 +744,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model_path: p }),
       });
-      setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပြီ။ Backend restart လုပ်ပြီးမှအလုပ်လုပ်မည်။", "ok");
+      setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပါပြီ။", "ok");
       setTimeout(refreshModels, 400);
     } catch (e) {
       setMsg(mUploadMsg, "Activate မအောင်မြင် — " + e.message, "err");
@@ -867,25 +771,15 @@
   function escapeAttr(s) { return escapeHtml(s); }
 
   function bind() {
-    // Tab switching
-    document.querySelectorAll(".tab").forEach((t) => {
-      t.addEventListener("click", () => switchTab(t.dataset.tab));
-    });
-
-    startBtn.addEventListener("click", startTraining);
-    stopBtn.addEventListener("click", stopTraining);
-    $("refreshDatasets").addEventListener("click", loadDatasets);
     $("refreshModels").addEventListener("click", refreshModels);
-    $("clearLogsBtn").addEventListener("click", () => { logBox.innerHTML = ""; since = 0; });
-    zipFileInput.addEventListener("change", onPickZip);
-    uploadForm.addEventListener("submit", onUpload);
-    dragDrop(filePicker, zipFileInput, onPickZip);
+    $("clearLogsBtn").addEventListener("click", () => { logBox.innerHTML = ""; mSince = 0; });
 
-    // Master
     mZipFileInput.addEventListener("change", onPickMasterZip);
     mUploadForm.addEventListener("submit", onMasterUpload);
     if (mFilePicker) dragDrop(mFilePicker, mZipFileInput, onPickMasterZip);
     mRefreshMasterBtn.addEventListener("click", loadMasterInfo);
+    mReplayBtn.addEventListener("click", onReplayAdd);
+    mReplayRemoveBtn.addEventListener("click", onReplayRemove);
     mStartBtn.addEventListener("click", onMasterStart);
     mActivateBtn.addEventListener("click", onMasterActivate);
     mDownloadBtn.addEventListener("click", onMasterDownload);
@@ -893,11 +787,6 @@
 
   async function init() {
     bind();
-    const initial = await api("/training/status").catch(() => null);
-    if (initial) {
-      applyStatusState(initial);
-      if (initial.status === "running" || initial.status === "stopping") startPolling();
-    }
     const mInit = await api("/master/status").catch(() => null);
     if (mInit) {
       applyMasterStatus(mInit);
@@ -907,9 +796,10 @@
       }
       if (mInit.status === "running") startMasterPolling();
     }
-    loadDatasets();
+
     refreshModels();
     loadMasterInfo();
+    pollReplayOnce();
   }
 
   document.addEventListener("DOMContentLoaded", init);
