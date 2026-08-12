@@ -18,7 +18,7 @@
   // Master-specific elements
   const mZipFileInput = $("mZipFile");
   const mZipFileName = $("mZipFileName");
-  const mFilePicker = document.querySelector(".tab-panel[data-panel=master] .file-picker");
+  const mFilePicker = document.querySelector(".tab-panel .file-picker");
   const mUploadForm = $("mUploadForm");
   const mUploadBtn = $("mUploadBtn");
   const mUploadMsg = $("mUploadMsg");
