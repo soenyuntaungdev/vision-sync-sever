@@ -29,7 +29,9 @@ Colab ရဲ့ `/content` က **ephemeral** (session ပြီးရင် ပ�
 
 ```python
 # ============================================================
-# VISION SYNC BACKEND — GOOGLE COLAB + NGROK (Drive persistence ပါ)
+# VISION SYNC BACKEND — GOOGLE COLAB + NGROK
+#   dataset/ runs/  → local disk  (မြန် + Drive ပြုတ်လည်း training မပျက်)
+#   models/ uploads/→ Google Drive (ရလဒ် .pt မပျောက်စေရန်)
 # ============================================================
 
 NGROK_TOKEN     = "သင့် ngrok token"
@@ -40,22 +42,28 @@ USE_DRIVE       = True   # False ဆိုရင် session ပြီးတာ�
 !pip install -q fastapi "uvicorn[standard]" ultralytics pydantic python-multipart \
                 pillow "numpy<2.0" opencv-python-headless pyyaml pyngrok nest_asyncio 2>&1 | tail -3
 
-import os, shutil, subprocess
+import os, re, shutil, subprocess, time
 
-# ---------- Step 2: Google Drive mount (persistence) ----------
-PERSIST_ROOT = None
+REPO       = '/content/visionsync_repo'
+LOCAL_DS   = '/content/local_dataset'
+LOCAL_RUNS = '/content/local_runs'
+
+# ---------- Step 2: Google Drive mount ----------
+DRIVE = None
 if USE_DRIVE:
     from google.colab import drive
-    drive.mount('/content/drive', force_remount=False)
-    PERSIST_ROOT = '/content/drive/MyDrive/visionsync_data'
-    os.makedirs(PERSIST_ROOT, exist_ok=True)
-    print(f"[OK] Persistent storage: {PERSIST_ROOT}")
+    if not os.path.isdir('/content/drive/MyDrive'):
+        drive.mount('/content/drive')
+    if not os.path.isdir('/content/drive/MyDrive'):
+        raise SystemExit('❌ Drive mount မအောင်မြင်ပါ')
+    DRIVE = '/content/drive/MyDrive/visionsync_data'
+    os.makedirs(DRIVE, exist_ok=True)
+    print(f'[OK] Drive: {DRIVE}')
 
 # ---------- Step 3: Repo (code ကိုသာ အသစ်ယူမည်) ----------
 os.chdir('/content')
-REPO = '/content/visionsync_repo'
 if os.path.isdir(os.path.join(REPO, '.git')):
-    print("[..] repo ရှိပြီးသား — git pull လုပ်နေသည်")
+    print('[..] repo ရှိပြီးသား — git pull လုပ်နေသည်')
     subprocess.run(['git', '-C', REPO, 'fetch', '--all'], check=False)
     subprocess.run(['git', '-C', REPO, 'reset', '--hard', 'origin/main'], check=False)
 else:
@@ -66,69 +74,105 @@ BACKEND = REPO
 if os.path.isfile(os.path.join(REPO, 'backend', 'main.py')):
     BACKEND = os.path.join(REPO, 'backend')
 os.chdir(BACKEND)
-print(f"[OK] Working dir: {os.getcwd()}")
+print(f'[OK] Working dir: {os.getcwd()}')
 
-# ---------- Step 4: dataset / runs / models ကို Drive နဲ့ ချိတ် ----------
-if PERSIST_ROOT:
-    for name in ('dataset', 'runs', 'models', 'uploads'):
-        target = os.path.join(PERSIST_ROOT, name)
-        os.makedirs(target, exist_ok=True)
-        link = os.path.join(BACKEND, name)
-        # repo ထဲမှာ ပါလာတဲ့ ဖိုင်တွေကို Drive ထဲ တစ်ခါတည်း ကူးထည့်မည်
-        if os.path.isdir(link) and not os.path.islink(link):
-            for item in os.listdir(link):
-                src, dst = os.path.join(link, item), os.path.join(target, item)
-                if not os.path.exists(dst):
-                    (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
-            shutil.rmtree(link)
-        elif os.path.islink(link):
-            os.unlink(link)
-        os.symlink(target, link)
-        print(f"  {name}/ -> {target}")
+# ---------- Step 4: Folder layout ----------
+def relink(link_path, target):
+    """link_path → target ချိတ်မည်။ ဖိုင်အစစ်ရှိရင် ဖျက်မပစ်ဘဲ target ထဲ ရွှေ့ပြီးမှ ချိတ်သည်။"""
+    os.makedirs(target, exist_ok=True)
+    name = os.path.basename(link_path)
+    if os.path.islink(link_path):
+        if os.path.realpath(link_path) == os.path.realpath(target):
+            print(f'  = {name}/ (ချိတ်ပြီးသား)');  return
+        os.unlink(link_path)
+    elif os.path.isdir(link_path):
+        moved = 0
+        for item in os.listdir(link_path):
+            src, dst = os.path.join(link_path, item), os.path.join(target, item)
+            if not os.path.exists(dst):
+                shutil.move(src, dst); moved += 1
+        shutil.rmtree(link_path, ignore_errors=True)
+        if moved: print(f'  ! {name}/ ထဲက {moved} ခုကို ကယ်ပြီး ရွှေ့ပြီး')
+    os.symlink(target, link_path)
+    print(f'  → {name}/ -> {target}')
 
-    # Activate လုပ်ထားတဲ့ model မှတ်တမ်းကိုပါ Drive မှာ ထားမည်
-    am_target = os.path.join(PERSIST_ROOT, 'active_model.json')
-    am_link = os.path.join(BACKEND, 'active_model.json')
-    if os.path.lexists(am_link):
-        os.remove(am_link)
+# 4a. dataset ကို Drive ကနေ local disk သို့ restore
+#     (Drive ကနေ တိုက်ရိုက် train ရင် mount ပြုတ်ချိန် "Image Not Found" တက်သည်)
+if DRIVE:
+    drive_ds = f'{DRIVE}/dataset'
+    os.makedirs(drive_ds, exist_ok=True)
+    if not os.path.isdir(LOCAL_DS):
+        print('[..] dataset ကို Drive → local ကူးနေသည် (၁-၂ မိနစ်)')
+        shutil.copytree(drive_ds, LOCAL_DS, dirs_exist_ok=True)
+    print(f'[OK] local dataset: {LOCAL_DS}')
+
+# 4b. symlink များ ချိတ်
+relink(os.path.join(BACKEND, 'dataset'), LOCAL_DS)
+relink(os.path.join(BACKEND, 'runs'),    LOCAL_RUNS)
+if DRIVE:
+    relink(os.path.join(BACKEND, 'models'),  f'{DRIVE}/models')
+    relink(os.path.join(BACKEND, 'uploads'), f'{DRIVE}/uploads')
+
+    am_target, am_link = f'{DRIVE}/active_model.json', os.path.join(BACKEND, 'active_model.json')
     if not os.path.exists(am_target):
-        with open(am_target, 'w') as f:
-            f.write('{"model_path": "yolov8n.pt"}')
+        open(am_target, 'w').write('{"model_path": "yolov8n.pt"}')
+    if os.path.lexists(am_link): os.remove(am_link)
     os.symlink(am_target, am_link)
-    print(f"  active_model.json -> {am_target}")
+    print(f'  → active_model.json -> {am_target}')
+
+# 4c. data.yaml ရဲ့ path များကို relative ပြန်လုပ် (server က local အဖြစ် auto ပြန်ချိတ်မည်)
+y = os.path.join(BACKEND, 'dataset', 'master', 'data.yaml')
+if os.path.isfile(y):
+    _s = open(y, encoding='utf-8').read()
+    _r = {'path':'path: .', 'train':'train: images/train',
+          'val':'val: images/val', 'test':'test: images/test'}
+    open(y, 'w', encoding='utf-8').write(
+        re.sub(r'^(path|train|val|test):.*$', lambda m: _r[m.group(1)], _s, flags=re.M))
+    for _sp in ('train', 'val'):
+        _c = os.path.join(BACKEND, 'dataset', 'master', 'labels', _sp + '.cache')
+        if os.path.exists(_c): os.remove(_c)          # stale cache ဖျက်
+        _d = os.path.join(BACKEND, 'dataset', 'master', 'images', _sp)
+        if os.path.isdir(_d): print(f'  master {_sp}: {len(os.listdir(_d))} ပုံ')
 
 # ---------- Step 5: အရင် server ကို ရပ် (port 8000 လွတ်စေရန်) ----------
-# Cell ကို ထပ်ခါထပ်ခါ run တဲ့အခါ အရင် uvicorn က မသေဘဲ ကျန်နေတတ်ပြီး
-# "[Errno 98] address already in use" တက်ကာ **အဟောင်း code ပဲ ဆက်အလုပ်လုပ်နေ**တတ်သည်။
-import time
 subprocess.run(['pkill', '-9', '-f', 'uvicorn main:app'], check=False)
 time.sleep(2)
-_busy = subprocess.run(
-    "python3 -c \"import socket;s=socket.socket();print(s.connect_ex(('127.0.0.1',8000)))\"",
-    shell=True, capture_output=True, text=True).stdout.strip()
-print("[OK] port 8000 လွတ်ပါပြီ" if _busy != "0" else "[!!] port 8000 မလွတ်သေးပါ — Runtime → Restart session လုပ်ပါ")
+import socket
+_s = socket.socket(); _busy = _s.connect_ex(('127.0.0.1', 8000)) == 0; _s.close()
+print('[!!] port 8000 မလွတ်သေးပါ — Runtime → Restart session' if _busy else '[OK] port 8000 လွတ်ပါပြီ')
 
 # ---------- Step 6: ngrok ----------
 from pyngrok import ngrok, conf
 conf.get_default().auth_token = NGROK_TOKEN
-!pkill ngrok # Forcefully kill any running ngrok processes
+subprocess.run(['pkill', '-f', 'ngrok'], check=False)
 ngrok.kill()
 
 import nest_asyncio
 nest_asyncio.apply()
 
 tunnel = ngrok.connect(8000, bind_tls=True)
-public_url = tunnel.public_url
-print("\n" + "=" * 70)
-print(f"✅ PUBLIC URL (Mobile ထဲထည့်ရန်): {public_url}")
-print(f"    Health Check: {public_url}/health")
-print(f"    Training UI:  {public_url}/training")
-print("=" * 70 + "\n")
+print('\n' + '=' * 70)
+print(f'✅ PUBLIC URL (Mobile ထဲထည့်ရန်): {tunnel.public_url}')
+print(f'    Health Check: {tunnel.public_url}/health')
+print(f'    Training UI:  {tunnel.public_url}/training')
+print('=' * 70 + '\n')
 
 # ---------- Step 7: Server ----------
 !uvicorn main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
 ```
 
+### 💾 Dataset ကို Drive ကို ပြန်သိမ်းရန် (zip အသစ်တင်ပြီးတိုင်း)
+
+`dataset/` က local disk မှာ ရှိနေလို့ **session ပြီးရင် ပျောက်**ပါမယ်။
+Zip အသစ်တင်ပြီး / COCO replay ထည့်ပြီးတိုင်း ဒီ cell ကို တစ်ခါ run ပါ —
+
+```python
+!rsync -a --delete /content/local_dataset/ /content/drive/MyDrive/visionsync_data/dataset/
+print('✅ dataset ကို Drive ကို သိမ်းပြီး')
+```
+
+> ရလဒ် `.pt` ဖိုင်တွေကတော့ `models/` (Drive) ထဲ **အလိုအလျောက်** ရောက်နေပြီးသားမို့
+> ဒီ cell မလုပ်လည်း မပျောက်ပါ။ Dataset ကိုပဲ သိမ်းတာပါ။
 ### ⚠️ `[Errno 98] address already in use` တက်ရင်
 
 အရင် server က မသေဘဲ ကျန်နေတာပါ။ **အန္တရာယ်ရှိတာက** — ngrok URL က အလုပ်လုပ်နေဦးမှာမို့
