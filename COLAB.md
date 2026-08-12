@@ -97,9 +97,21 @@ if PERSIST_ROOT:
     os.symlink(am_target, am_link)
     print(f"  active_model.json -> {am_target}")
 
-# ---------- Step 5: ngrok ----------
+# ---------- Step 5: အရင် server ကို ရပ် (port 8000 လွတ်စေရန်) ----------
+# Cell ကို ထပ်ခါထပ်ခါ run တဲ့အခါ အရင် uvicorn က မသေဘဲ ကျန်နေတတ်ပြီး
+# "[Errno 98] address already in use" တက်ကာ **အဟောင်း code ပဲ ဆက်အလုပ်လုပ်နေ**တတ်သည်။
+import time
+subprocess.run(['pkill', '-9', '-f', 'uvicorn main:app'], check=False)
+time.sleep(2)
+_busy = subprocess.run(
+    "python3 -c \"import socket;s=socket.socket();print(s.connect_ex(('127.0.0.1',8000)))\"",
+    shell=True, capture_output=True, text=True).stdout.strip()
+print("[OK] port 8000 လွတ်ပါပြီ" if _busy != "0" else "[!!] port 8000 မလွတ်သေးပါ — Runtime → Restart session လုပ်ပါ")
+
+# ---------- Step 6: ngrok ----------
 from pyngrok import ngrok, conf
 conf.get_default().auth_token = NGROK_TOKEN
+!pkill ngrok # Forcefully kill any running ngrok processes
 ngrok.kill()
 
 import nest_asyncio
@@ -113,9 +125,23 @@ print(f"    Health Check: {public_url}/health")
 print(f"    Training UI:  {public_url}/training")
 print("=" * 70 + "\n")
 
-# ---------- Step 6: Server ----------
+# ---------- Step 7: Server ----------
 !uvicorn main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
 ```
+
+### ⚠️ `[Errno 98] address already in use` တက်ရင်
+
+အရင် server က မသေဘဲ ကျန်နေတာပါ။ **အန္တရာယ်ရှိတာက** — ngrok URL က အလုပ်လုပ်နေဦးမှာမို့
+"အဆင်ပြေတယ်" ထင်ရပေမယ့် တကယ်က **အဟောင်း code ကိုပဲ သုံးနေတာ** ဖြစ်ပါတယ်။
+`git pull` နဲ့ ဆွဲထားတဲ့ ပြင်ဆင်မှုတွေ အသက်မဝင်ပါ။
+
+Cell အသစ်တစ်ခုမှာ ဒါကို run ပါ —
+
+```python
+!pkill -9 -f "uvicorn main:app"
+```
+
+ပြီးမှ main cell ကို ပြန် run ပါ။ မရသေးရင် **Runtime → Restart session** လုပ်ပါ။
 
 ---
 
