@@ -1,8 +1,0 @@
-{
-  "source": "coco128",
-  "per_class": 10,
-  "images_train": 100,
-  "images_val": 24,
-  "label_rows": 922,
-  "added_at": 1786505897.8366797
-}

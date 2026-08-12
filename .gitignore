@@ -8,6 +8,11 @@ runs/
 models/
 uploads/
 
+# COCO replay download cache (ပြန် download လုပ်လို့ရသည် — repo ထဲ မထည့်ရ)
+.cache/
+
 # Dataset ပုံ/label များ (master/data.yaml ကိုတော့ ထားမည်)
 dataset/*/images/
 dataset/*/labels/
+dataset/*/.coco_replay.json
+*.cache

@@ -60,16 +60,19 @@ REPLAY_MARKER = ".coco_replay.json"
 SOURCES: Dict[str, Dict[str, Any]] = {
     "coco128": {
         "label": "COCO128 (ပုံ ၁၂၈၊ ~၇ MB — အမြန်စမ်းရန်)",
-        "urls": [("coco128.zip", "https://ultralytics.com/assets/coco128.zip")],
+        "urls": [("coco128.zip", "https://ultralytics.com/assets/coco128.zip", None)],
         "split": "train2017",
         "approx_mb": 7,
     },
     "val2017": {
         "label": "COCO val2017 (ပုံ ၅၀၀၀၊ ~၈၀၀ MB — class ၈၀ လုံးအတွက် အကောင်းဆုံး)",
+        # (ဖိုင်နာမည်, URL, ဖြေမည့် member filter) — filter က train2017 ရဲ့
+        # label ၁၁၈,၀၀၀ ကို ကျော်ဖို့ပါ (val2017 ကိုပဲ သုံးသည်)
         "urls": [
             ("coco2017labels.zip",
-             "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco2017labels.zip"),
-            ("val2017.zip", "http://images.cocodataset.org/zips/val2017.zip"),
+             "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco2017labels.zip",
+             ("labels/val2017/",)),
+            ("val2017.zip", "http://images.cocodataset.org/zips/val2017.zip", None),
         ],
         "split": "val2017",
         "approx_mb": 830,
@@ -112,18 +115,35 @@ def _download(url: str, dest: str, on_log: Callable[[str], None]) -> None:
     on_log(f"  ✔ ပြီးပါပြီ: {os.path.basename(dest)}")
 
 
-def _extract(zip_path: str, out_dir: str, on_log: Callable[[str], None]) -> None:
-    marker = os.path.join(out_dir, "." + os.path.basename(zip_path) + ".done")
+def _extract(
+    zip_path: str,
+    out_dir: str,
+    on_log: Callable[[str], None],
+    keep_substrings: Optional[Tuple[str, ...]] = None,
+) -> None:
+    """
+    Zip ကို ဖြေမည်။ keep_substrings ပေးထားရင် ထို စာသားပါဝင်သော member များကိုသာ ဖြေမည်။
+
+    ဥပမာ coco2017labels.zip ထဲမှာ train2017 label ဖိုင် ၁၁၈,၀၀၀ ပါလာသည် —
+    ကျွန်ုပ်တို့ val2017 ကိုပဲ သုံးသဖြင့် ထိုဖိုင်များကို ဖြေစရာမလိုပါ
+    (Colab မှာ မိနစ်အတော်ကြာ သက်သာသည်)။
+    """
+    tag = "" if not keep_substrings else "." + str(abs(hash(keep_substrings)) % 100000)
+    marker = os.path.join(out_dir, "." + os.path.basename(zip_path) + tag + ".done")
     if os.path.isfile(marker):
         on_log(f"  ✔ extract ပြီးသား: {os.path.basename(zip_path)}")
         return
     os.makedirs(out_dir, exist_ok=True)
-    on_log(f"  📦 Extract: {os.path.basename(zip_path)}")
+    on_log(f"  📦 Extract: {os.path.basename(zip_path)} (ခဏစောင့်ပါ)")
+    out_norm = os.path.normpath(out_dir)
+    written = 0
     with zipfile.ZipFile(zip_path, "r") as zf:
         for m in zf.namelist():
+            if keep_substrings and not any(k in m for k in keep_substrings):
+                continue
             # Zip-slip ကာကွယ်မှု
             target = os.path.normpath(os.path.join(out_dir, m))
-            if not target.startswith(os.path.normpath(out_dir) + os.sep) and target != os.path.normpath(out_dir):
+            if not target.startswith(out_norm + os.sep) and target != out_norm:
                 continue
             if m.endswith("/"):
                 os.makedirs(target, exist_ok=True)
@@ -131,17 +151,17 @@ def _extract(zip_path: str, out_dir: str, on_log: Callable[[str], None]) -> None
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with zf.open(m) as src, open(target, "wb") as dst:
                 shutil.copyfileobj(src, dst)
+            written += 1
+            if written % 2000 == 0:
+                on_log(f"    ... {written:,} ဖိုင် ဖြေပြီး")
+    on_log(f"  ✔ Extract ပြီး: {written:,} ဖိုင်")
     with open(marker, "w") as f:
         f.write("ok")
 
 
 def _find_dir(root: str, name: str, parent_hint: Optional[str] = None) -> Optional[str]:
     """root အောက်မှာ `name` ဆိုတဲ့ folder ကို ရှာပေးမည် (parent_hint ပါရင် ဦးစားပေး)။"""
-    matches: List[str] = []
-    for dirpath, dirnames, _ in os.walk(root):
-        for d in dirnames:
-            if d == name:
-                matches.append(os.path.join(dirpath, d))
+    matches = _find_dirs(root, name)
     if not matches:
         return None
     if parent_hint:
@@ -151,31 +171,84 @@ def _find_dir(root: str, name: str, parent_hint: Optional[str] = None) -> Option
     return matches[0]
 
 
+IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+
+
+def _find_dirs(root: str, name: str) -> List[str]:
+    """root အောက်မှာ `name` ဆိုတဲ့ folder အားလုံးကို ရှာပေးမည်။"""
+    out: List[str] = []
+    for dirpath, dirnames, _ in os.walk(root):
+        for d in dirnames:
+            if d == name:
+                out.append(os.path.join(dirpath, d))
+    return out
+
+
+def _count_files(d: str, exts: Tuple[str, ...]) -> int:
+    try:
+        return sum(1 for f in os.listdir(d) if f.lower().endswith(exts))
+    except Exception:
+        return 0
+
+
+def _pick_richest_dir(candidates: List[str], exts: Tuple[str, ...]) -> Tuple[Optional[str], int]:
+    """
+    Candidate folder များထဲမှ လိုချင်တဲ့ ဖိုင်အမျိုးအစား **အများဆုံးပါတဲ့** folder ကို ရွေးသည်။
+
+    ဘာလို့ လိုအပ်လဲ — coco2017labels.zip ထဲမှာ `coco/images/val2017/` ဆိုတဲ့
+    **အလွတ် folder** ပါလာသည်။ နာမည်နဲ့ parent ကိုပဲ ကြည့်ပြီး ရွေးရင် ထို
+    အလွတ် folder ကို ကောက်ယူမိပြီး၊ ပုံအစစ်ရှိရာ `val2017/` ကို လွတ်သွားကာ
+    "ရွေးစရာ ပုံမတွေ့ရှိပါ" error တက်ခဲ့သည်။
+    """
+    best: Optional[str] = None
+    best_n = 0
+    seen = set()
+    for d in candidates:
+        rd = os.path.realpath(d)
+        if rd in seen:
+            continue
+        seen.add(rd)
+        n = _count_files(d, exts)
+        if n > best_n:
+            best, best_n = d, n
+    return best, best_n
+
+
 def _prepare_source(source: str, on_log: Callable[[str], None]) -> Tuple[str, str]:
     """Download + extract ပြီး (images_dir, labels_dir) ကို ပြန်ပေးမည်။"""
     spec = SOURCES[source]
     work = os.path.join(CACHE_DIR, source)
     os.makedirs(work, exist_ok=True)
 
-    for fname, url in spec["urls"]:
+    for entry in spec["urls"]:
+        fname, url = entry[0], entry[1]
+        keep = entry[2] if len(entry) > 2 else None
         zp = os.path.join(CACHE_DIR, fname)
         _download(url, zp, on_log)
-        _extract(zp, work, on_log)
+        _extract(zp, work, on_log, keep_substrings=keep)
 
     split = spec["split"]
-    images_dir = _find_dir(work, split, parent_hint="images")
-    labels_dir = _find_dir(work, split, parent_hint="labels")
+    # နာမည်တူ folder အားလုံးကို စုပြီး၊ ဖိုင်တကယ်ပါတာကို ရွေးမည်
+    candidates = _find_dirs(work, split)
+    candidates.append(os.path.join(work, split))          # val2017.zip → work/val2017/
+    candidates.append(work)                                # ဖြစ်နိုင်ခြေ နောက်တစ်ခု
 
-    # val2017.zip က `val2017/` ကို တိုက်ရိုက်ထုတ်သည် (images parent မရှိ)
-    if images_dir is None:
-        cand = os.path.join(work, split)
-        if os.path.isdir(cand):
-            images_dir = cand
-    if images_dir is None or labels_dir is None:
+    images_dir, n_img = _pick_richest_dir(candidates, IMG_EXTS)
+    labels_dir, n_lbl = _pick_richest_dir(candidates, (".txt",))
+
+    if not images_dir or not labels_dir:
+        found = []
+        for d in candidates:
+            if os.path.isdir(d):
+                found.append(f"{os.path.relpath(d, work)} (img={_count_files(d, IMG_EXTS)}, "
+                             f"txt={_count_files(d, ('.txt',))})")
         raise RuntimeError(
-            f"Extract ပြီးပေမယ့် images/labels folder မတွေ့ရှိပါ "
-            f"(images={images_dir}, labels={labels_dir}) — cache ကို ဖျက်ပြီး ပြန်စမ်းပါ: {work}"
+            f"Extract ပြီးပေမယ့် images/labels folder မတွေ့ရှိပါ။ "
+            f"တွေ့ရှိသည်များ: {' | '.join(found) or '(ဘာမှမရှိ)'} — "
+            f"cache ကို ဖျက်ပြီး ပြန်စမ်းပါ: {work}"
         )
+    on_log(f"  📁 images: {os.path.relpath(images_dir, work)} ({n_img:,} ပုံ)")
+    on_log(f"  📁 labels: {os.path.relpath(labels_dir, work)} ({n_lbl:,} ဖိုင်)")
     return images_dir, labels_dir
 
 
