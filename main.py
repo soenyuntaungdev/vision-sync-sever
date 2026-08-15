@@ -89,6 +89,8 @@ class DetectionItem(BaseModel):
 
 class DetectResponse(BaseModel):
     detections: List[DetectionItem]
+    description: Optional[str] = None
+    engine: Optional[str] = "Google Gemini Vision"
 
 
 class ReportRequest(BaseModel):
@@ -230,47 +232,37 @@ def root():
 def health_check():
     return {
         "status": "ok",
-        "model_loaded": not detector.use_fallback,
-        "model_name": detector.model_name,
-        # model_loaded=False ßÇåßÇ¡ßÇ»ßÇ¢ßÇäßÇ║ detection ßÇÉßÇ╜ßÇ▒ßÇƒßÇ¼ random fake data ßÇûßÇ╝ßÇàßÇ║ßÇòßÇ½ßÇ₧ßÇèßÇ║ßüï
-        # load_error ßÇÇßÇ¡ßÇ» ßÇÇßÇ╝ßÇèßÇ╖ßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ ßÇíßÇÇßÇ╝ßÇ▒ßÇ¼ßÇäßÇ║ßÇ╕ßÇ¢ßÇäßÇ║ßÇ╕ßÇÇßÇ¡ßÇ» ßÇ₧ßÇ¡ßÇößÇ¡ßÇ»ßÇäßÇ║ßÇ₧ßÇèßÇ║ßüï
-        "load_error": getattr(detector, "load_error", None),
-        "nc": len(getattr(detector, "class_names", []) or []),
-        "class_names": getattr(detector, "class_names", []) or [],
-        "current_active_model": training_manager.current_model(),
+        "engine": "Google Gemini Vision AI",
+        "gemini_active": vlm_assistant.is_configured,
+        "model_name": "gemini-3.5-flash / gemini-3.7-flash",
+        "features": [
+            "Real-time Multimodal Object Detection (/detect)",
+            "Myanmar Natural Language Scene Description (/vlm/describe)",
+            "Myanmar Visual Question Answering (/vlm/query)"
+        ],
         "timestamp": int(time.time()),
     }
 
 
 @app.post("/detect", response_model=DetectResponse)
 def detect_objects(req: DetectRequest):
+    """
+    Main Object Detection Endpoint powered by Google Gemini Vision.
+    Detects objects, obstacles, and items with normalized bounding boxes.
+    """
     if not req.image:
         raise HTTPException(status_code=400, detail="Image base64 string is required")
 
     conf_th = 0.35 if req.conf is None else float(req.conf)
-    mode_str = (req.mode or "general").lower()
 
     try:
-        # If explicitly requested gemini/vlm mode, use Google Gemini Vision
-        if mode_str in ("gemini", "vlm", "cloud"):
-            detections = vlm_assistant.detect_objects(req.image, conf_threshold=conf_th)
-            return {"detections": detections}
-
-        detections = detector.detect(
-            image_base64=req.image,
-            mode=req.mode,
-            conf_threshold=conf_th,
-        )
-
-        # If local model is fallback and Gemini is available, use Gemini Vision for accurate results
-        if getattr(detector, "use_fallback", False) and vlm_assistant.is_configured:
-            cloud_detections = vlm_assistant.detect_objects(req.image, conf_threshold=conf_th)
-            if cloud_detections:
-                return {"detections": cloud_detections}
-
-        return {"detections": detections}
+        detections = vlm_assistant.detect_objects(req.image, conf_threshold=conf_th)
+        return {
+            "detections": detections,
+            "engine": "Google Gemini Vision"
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gemini Detection failed: {str(e)}")
 
 
 @app.post("/vlm/detect", response_model=DetectResponse)
