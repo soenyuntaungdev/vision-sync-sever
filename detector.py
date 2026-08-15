@@ -84,7 +84,7 @@ class ObjectDetector:
     automatically if model weights are unavailable or PyTorch/Ultralytics is absent.
     """
 
-    def __init__(self, model_name: str = "yolov8n-oiv7.pt", allow_fallback: bool = True):
+    def __init__(self, model_name: str = "yolov8m-oiv7.pt", allow_fallback: bool = True):
         self.model_name = model_name
         self.model = None
         self.use_fallback = False
