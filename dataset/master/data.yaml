@@ -2,7 +2,7 @@ path: "E:/VisionSync/backend/dataset/master"
 train: "E:/VisionSync/backend/dataset/master/images/train"
 val: "E:/VisionSync/backend/dataset/master/images/val"
 test: "E:/VisionSync/backend/dataset/master/images/test"
-nc: 80
+nc: 82
 names:
   0: person
   1: bicycle
@@ -84,3 +84,5 @@ names:
   77: "teddy bear"
   78: "hair drier"
   79: toothbrush
+  80: myanmar_coin
+  81: traffic_light_mm

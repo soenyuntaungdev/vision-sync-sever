@@ -12,11 +12,28 @@ logging.basicConfig(level=logging.INFO)
 # passing larger frames wastes compute without accuracy gain.
 MAX_INFER_DIM = 640
 
+# COCO 80 class names. MODE_CLASSES filters are based on these names.
+# Any class not in this set is treated as a custom class and always allowed
+# through the mode filter so fine-tuned classes are never hidden.
+COCO_CLASS_NAMES: Set[str] = {
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake",
+    "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop",
+    "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush",
+}
+
 # Mode filtering definitions matching constants/modes.ts in VisionSync app.
 # Each set includes both COCO-style names AND LVIS-style names (underscore/parentheses
-# variants) so that filtering works regardless of the loaded model's naming convention.
+# variants) so that filtering works regardless of the loaded model naming convention.
 MODE_CLASSES: Dict[str, Optional[Set[str]]] = {
-    "general": None,  # All 601 Open Images v7 classes (no filter)
+    "general": None,  # All classes (no filter)
     "security": {
         # People & personal items
         "person",
@@ -59,6 +76,7 @@ MODE_CLASSES: Dict[str, Optional[Set[str]]] = {
     },
 }
 
+
 class ObjectDetector:
     """
     Ultralytics YOLO object detector supporting COCO (80 classes) and Open Images
@@ -66,34 +84,61 @@ class ObjectDetector:
     automatically if model weights are unavailable or PyTorch/Ultralytics is absent.
     """
 
-    def __init__(self, model_name: str = "yolov8n-oiv7.pt"):
+    def __init__(self, model_name: str = "yolov8n-oiv7.pt", allow_fallback: bool = True):
         self.model_name = model_name
         self.model = None
         self.use_fallback = False
         self.load_error: Optional[str] = None
-        self.model_classes: Optional[List[str]] = None
+        self.class_names: List[str] = []
+        # allow_fallback=False raises on load failure instead of silently producing
+        # fake detections that mislead the mobile app into thinking the model works.
+        self.allow_fallback = allow_fallback
         self._load_model()
 
     def _load_model(self):
         self.load_error = None
-        self.model_classes = None
+        self.class_names = []
         try:
             from ultralytics import YOLO
             logger.info(f"Loading YOLO model: {self.model_name}...")
             self.model = YOLO(self.model_name)
-            try:
-                names_attr = getattr(self.model.model, "names", {})
-                if isinstance(names_attr, list):
-                    self.model_classes = [str(n) for n in names_attr]
-                elif isinstance(names_attr, dict):
-                    self.model_classes = [str(names_attr[i]) for i in sorted(names_attr.keys())]
-            except Exception:
-                pass
-            logger.info(f"YOLO model loaded successfully! Classes: {len(self.model_classes) if self.model_classes else '?'}")
+            names_attr = getattr(getattr(self.model, "model", None), "names", None)
+            if names_attr is None:
+                names_attr = getattr(self.model, "names", None)
+            if isinstance(names_attr, dict):
+                self.class_names = [str(names_attr[k]) for k in sorted(names_attr.keys())]
+            elif isinstance(names_attr, (list, tuple)):
+                self.class_names = [str(n) for n in names_attr]
+            logger.info(
+                f"YOLO model loaded successfully! nc={len(self.class_names)} "
+                f"classes={self.class_names[:5]}{'...' if len(self.class_names) > 5 else ''}"
+            )
         except Exception as e:
-            self.load_error = str(e)
+            self.load_error = f"{type(e).__name__}: {e}"
+            if not self.allow_fallback:
+                logger.error(f"Model load failed for '{self.model_name}': {self.load_error}")
+                raise
             logger.warning(f"Could not load Ultralytics YOLO model ({e}). Using smart fallback detector.")
             self.use_fallback = True
+
+    def _effective_allowed(self, mode: str, model_names: Optional[Set[str]]) -> Optional[Set[str]]:
+        """
+        Computes the effective allowed class set for a given mode, taking into account
+        the model class list so that custom (non-COCO) classes are always permitted.
+
+        Returns None when no filter should be applied (mode=general, or no overlap).
+        """
+        base = MODE_CLASSES.get(mode, None)
+        if base is None:
+            return None
+        if not model_names:
+            return base
+        custom_names = model_names - COCO_CLASS_NAMES
+        allowed = set(base) | custom_names
+        if not (model_names & allowed):
+            # Model has no classes matching this mode -> show all rather than nothing
+            return None
+        return allowed
 
     def decode_base64_image(self, base64_str: str) -> Optional[Image.Image]:
         """
@@ -129,7 +174,7 @@ class ObjectDetector:
         if img_w <= 0 or img_h <= 0:
             return []
 
-        allowed_classes = MODE_CLASSES.get(mode, None)
+        allowed_classes = self._effective_allowed(mode, set(self.class_names) if self.class_names else None)
 
         if not self.use_fallback and self.model is not None:
             try:
@@ -144,20 +189,17 @@ class ObjectDetector:
                 results = self.model.predict(
                     img_np,
                     conf=conf_threshold,
-                    imgsz=640,   # native YOLO resolution — fastest inference
+                    imgsz=640,   # native YOLO resolution -- fastest inference
                     verbose=False,
                 )
 
                 detections = []
                 for result in results:
                     boxes = result.boxes
-                    model_classes_set: Optional[set] = None
+                    # Re-compute allowed_classes per result in case the model was
+                    # swapped at runtime and self.class_names is stale.
                     if result.names:
-                        model_classes_set = set(result.names.values())
-                    if allowed_classes is not None and model_classes_set:
-                        custom_classes = model_classes_set - allowed_classes
-                        if custom_classes:
-                            allowed_classes = None
+                        allowed_classes = self._effective_allowed(mode, set(result.names.values()))
                     for box in boxes:
                         cls_id_num = int(box.cls[0].item())
                         cls_name = result.names.get(cls_id_num, f"class_{cls_id_num}")
@@ -188,15 +230,22 @@ class ObjectDetector:
                         })
                 return detections
             except Exception as e:
+                # If a real model is loaded but inference fails, return empty rather
+                # than fake detections that would mislead the mobile app.
                 logger.error(f"YOLO detection error: {e}")
+                return []
 
-        # Fallback detector if YOLO is not available
+        # Fallback detector -- only reached when model weights are unavailable
         return self._fallback_detect(mode, allowed_classes)
 
     def _fallback_detect(self, mode: str, allowed_classes: Optional[Set[str]]) -> List[Dict[str, Any]]:
         """
         Fallback simulation generator when offline or without weights.
         """
+        logger.warning(
+            f"[FALLBACK] '{self.model_name}' could not be loaded; producing random test detections. "
+            f"load_error={self.load_error}"
+        )
         pool = list(allowed_classes) if allowed_classes else ["chair", "person", "cell phone", "bottle", "laptop"]
         count = int(np.random.randint(1, 4))
         detections = []

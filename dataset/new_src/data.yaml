@@ -1,0 +1,8 @@
+path: "C:/OpenSourceProjects/vision-sync-sever/dataset/new_src"
+train: "C:/OpenSourceProjects/vision-sync-sever/dataset/new_src/images/train"
+val: "C:/OpenSourceProjects/vision-sync-sever/dataset/new_src/images/val"
+test: "C:/OpenSourceProjects/vision-sync-sever/dataset/new_src/images/test"
+nc: 2
+names:
+  0: myanmar_coin
+  1: traffic_light_mm

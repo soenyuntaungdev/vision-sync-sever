@@ -100,7 +100,7 @@ def _read_yaml_simple(path: str) -> Dict[str, Any]:
 
 
 def _yaml_safe_str(value: Any) -> str:
-    """
+    r"""
     String တစ်ခုကို YAML-safe ဖြစ်အောင် normalize လုပ်ပေးမယ်။
     - Windows backslash (\) ကို forward slash (/) နဲ့ replace (path တွေအတွက်၊ Python on Windows က / ကိုလက်ခံတယ်)
     - Double quote (") ကို escape လုပ်ပေးမယ်
@@ -549,7 +549,9 @@ def preflight_check_training(yaml_path: str) -> Dict[str, Any]:
         n_imgs = len([x for x in os.listdir(p) if not x.lower().startswith(".")])
         out["info"][f"{k}_count"] = n_imgs
         if n_imgs == 0:
-            out["warnings"].append(f"{k} images folder မှာ ပုံမရှိသေးပါ")
+            # ပုံမရှိဘဲ train လုပ်ရင် Ultralytics က ဘာမှမသင်ရဘဲ ဖြတ်သွားပြီး
+            # ဘာမှ detect မလုပ်တဲ့ .pt တစ်ခု ထွက်လာသည်။ ဒါကို ကြိုတားမည်။
+            out["errors"].append(f"{k} images folder ({p}) မှာ ပုံ တစ်ပုံမှမရှိပါ")
         # label folder ရှာမယ်
         p_parts = os.path.normpath(p).split(os.sep)
         if "images" in p_parts:
@@ -570,6 +572,20 @@ def preflight_check_training(yaml_path: str) -> Dict[str, Any]:
         out["errors"].append(f"nc={nc} ကို မှန်ကန်အောင် ပြင်ပေးရပါမည်")
     elif names and len(names) != nc:
         out["warnings"].append(f"nc={nc} နှင့် names count={len(names)} မတူပါ")
-    if not out["errors"]:
+
+    # Label ဖိုင်တွေ လုံးဝမရှိရင် train လုပ်လို့ရပေမယ့် ဘာမှ မသင်ရသဖြင့်
+    # ရလာသော .pt က ဘာမှမမြင်တော့ပါ။ ဒါကို error အဖြစ် သတ်မှတ်သည်။
+    for k in ("train", "val"):
+        if out["info"].get(f"{k}_labels_count") == 0 and out["info"].get(f"{k}_count", 0) > 0:
+            out["errors"].append(
+                f"{k} labels folder ထဲမှာ .txt ဖိုင် တစ်ခုမှမရှိပါ — "
+                "ဒီအတိုင်း train ရင် ဘာမှ detect မလုပ်တဲ့ model ထွက်လာပါမည်"
+            )
+
+    # errors တစ်ခုခုရှိရင် ok ကို အမြဲ False ဖြစ်စေရမည်။
+    # (ယခင်က အချို့ error branch တွေမှာ ok=False မလုပ်ခဲ့လို့ ပျက်နေသော dataset နဲ့
+    #  training စထွက်သွားပြီး၊ ရလာတဲ့ .pt က အလုပ်မလုပ်တာ ဖြစ်ခဲ့သည်။)
+    out["ok"] = len(out["errors"]) == 0
+    if out["ok"]:
         out["info"]["ready"] = True
     return out

@@ -20,6 +20,7 @@ from training_manager import (
     UPLOADS_DIR,
     DATASET_DIR,
     TrainingManager,
+    read_active_model,
 )
 
 app = FastAPI(
@@ -41,7 +42,9 @@ os.makedirs(TRAINING_UI_DIR, exist_ok=True)
 if os.path.isdir(TRAINING_UI_DIR):
     app.mount("/training/assets", StaticFiles(directory=TRAINING_UI_DIR), name="training_assets")
 
-detector = ObjectDetector(model_name="yolov8n-oiv7.pt")
+# Active model ßÇÇßÇ¡ßÇ» active_model.json ßÇÖßÇ╛ ßÇûßÇÉßÇ║ßÇ₧ßÇèßÇ║ (ßÇÖßÇ¢ßÇ╛ßÇ¡ßÇ¢ßÇäßÇ║ yolov8n.pt)ßüï
+# ßÇñßÇößÇèßÇ║ßÇ╕ßÇûßÇ╝ßÇäßÇ╖ßÇ║ activate ßÇ£ßÇ»ßÇòßÇ║ßÇæßÇ¼ßÇ╕ßÇ₧ßÇ▒ßÇ¼ model ßÇ₧ßÇèßÇ║ server restart ßÇòßÇ╝ßÇ«ßÇ╕ßÇ£ßÇèßÇ║ßÇ╕ ßÇåßÇÇßÇ║ßÇíßÇ₧ßÇÇßÇ║ßÇ¥ßÇäßÇ║ßÇößÇ▒ßÇÖßÇèßÇ║ßüï
+detector = ObjectDetector(model_name=read_active_model())
 training_manager = TrainingManager()
 
 REPORTS_FILE = os.path.join(BACKEND_DIR, "reports_log.json")
@@ -61,6 +64,12 @@ def get_local_ip() -> str:
 class DetectRequest(BaseModel):
     image: str = Field(..., description="Base64 encoded JPEG or PNG image frame")
     mode: str = Field("general", description="Detection mode: 'general' | 'security' | 'industrial'")
+    conf: Optional[float] = Field(
+        None,
+        description="Confidence threshold (default 0.35). Custom model ßÇíßÇ₧ßÇàßÇ║ßÇÉßÇ╜ßÇ▒ßÇÇ confidence ßÇößÇ¡ßÇÖßÇ╖ßÇ║ßÇÉßÇÉßÇ║ßÇ£ßÇ¡ßÇ»ßÇ╖ 0.15 ßÇ£ßÇ▒ßÇ¼ßÇÇßÇ║ßÇößÇ▓ßÇ╖ ßÇàßÇÖßÇ║ßÇ╕ßÇÇßÇ╝ßÇèßÇ╖ßÇ║ßÇößÇ¡ßÇ»ßÇäßÇ║ßÇ₧ßÇèßÇ║ßüï",
+        ge=0.0,
+        le=1.0,
+    )
 
 
 class BoundingBox(BaseModel):
@@ -89,53 +98,58 @@ class ReportRequest(BaseModel):
     timestamp: Optional[int] = None
 
 
-class TrainStartRequest(BaseModel):
-    data_yaml_path: str = Field(..., description="Relative path to dataset data.yaml (e.g. dataset/my_dataset/data.yaml)")
-    base_model: str = "yolov8n.pt"
-    epochs: int = 50
-    img_size: int = 640
-    batch_size: int = 16
-    run_name: str = "visionsync_custom"
-
-
 class ActivateModelRequest(BaseModel):
     model_path: str
 
 
 class AddClassRequest(BaseModel):
-    yaml_path: str = Field(..., description="Master data.yaml ဖိုင်၏ relative or absolute path (ဥပမာ dataset/master/data.yaml)")
-    class_name: str = Field(..., description="အသစ်ထည့်မည့် Class နာမည်")
+    yaml_path: str = Field(..., description="Master data.yaml ßÇûßÇ¡ßÇ»ßÇäßÇ║ßüÅ relative or absolute path (ßÇÑßÇòßÇÖßÇ¼ dataset/master/data.yaml)")
+    class_name: str = Field(..., description="ßÇíßÇ₧ßÇàßÇ║ßÇæßÇèßÇ╖ßÇ║ßÇÖßÇèßÇ╖ßÇ║ Class ßÇößÇ¼ßÇÖßÇèßÇ║")
 
 
 class MergeDatasetRequest(BaseModel):
-    master_root: str = Field(..., description="Master dataset folder path (ဥပမာ dataset/master)")
-    source_root: str = Field(..., description="Dataset အသစ်ရှိသော folder path (data.yaml ပါသည့် folder)")
-    class_name: str = Field(..., description="Master ထဲသို့ထည့်မည့် / reuse မည့် Class နာမည်")
-    source_class_ids: Optional[List[int]] = Field(None, description="Source ထဲမှ ဤ IDs များကိုသာယူမည် (None ဆိုရင်အားလုံး)")
+    master_root: str = Field(..., description="Master dataset folder path (ßÇÑßÇòßÇÖßÇ¼ dataset/master)")
+    source_root: str = Field(..., description="Dataset ßÇíßÇ₧ßÇàßÇ║ßÇ¢ßÇ╛ßÇ¡ßÇ₧ßÇ▒ßÇ¼ folder path (data.yaml ßÇòßÇ½ßÇ₧ßÇèßÇ╖ßÇ║ folder)")
+    class_name: str = Field(..., description="Master ßÇæßÇ▓ßÇ₧ßÇ¡ßÇ»ßÇ╖ßÇæßÇèßÇ╖ßÇ║ßÇÖßÇèßÇ╖ßÇ║ / reuse ßÇÖßÇèßÇ╖ßÇ║ Class ßÇößÇ¼ßÇÖßÇèßÇ║")
+    source_class_ids: Optional[List[int]] = Field(None, description="Source ßÇæßÇ▓ßÇÖßÇ╛ ßÇñ IDs ßÇÖßÇ╗ßÇ¼ßÇ╕ßÇÇßÇ¡ßÇ»ßÇ₧ßÇ¼ßÇÜßÇ░ßÇÖßÇèßÇ║ (None ßÇåßÇ¡ßÇ»ßÇ¢ßÇäßÇ║ßÇíßÇ¼ßÇ╕ßÇ£ßÇ»ßÇ╢ßÇ╕)")
+    merge_mode: str = Field(
+        "auto",
+        description="'auto' | 'collapse' (ßÇíßÇ¼ßÇ╕ßÇ£ßÇ»ßÇ╢ßÇ╕ßÇÇßÇ¡ßÇ» class_name ßÇÉßÇàßÇ║ßÇüßÇ»ßÇÉßÇèßÇ║ßÇ╕) | 'per_class' (source class ßÇößÇ¼ßÇÖßÇèßÇ║ßÇÉßÇàßÇ║ßÇüßÇ»ßÇüßÇ╗ßÇäßÇ║ßÇ╕ ßÇ₧ßÇ«ßÇ╕ßÇ₧ßÇößÇ╖ßÇ║ßÇæßÇèßÇ╖ßÇ║)",
+    )
 
 
 class ContinueFinetuneRequest(BaseModel):
-    base_model: str = Field(..., description="မူလ ၈၀ မျိုးပါသည့် .pt ဖိုင်လမ်းကြောင်း")
-    source_root: str = Field(..., description="Dataset အသစ်ရှိသော folder path")
-    class_name: str = Field(..., description="ပစ္စည်းအသစ်၏ Class နာမည်")
+    base_model: str = Field(..., description="ßÇÖßÇ░ßÇ£ ßüêßüÇ ßÇÖßÇ╗ßÇ¡ßÇ»ßÇ╕ßÇòßÇ½ßÇ₧ßÇèßÇ╖ßÇ║ .pt ßÇûßÇ¡ßÇ»ßÇäßÇ║ßÇ£ßÇÖßÇ║ßÇ╕ßÇÇßÇ╝ßÇ▒ßÇ¼ßÇäßÇ║ßÇ╕")
+    source_root: str = Field(..., description="Dataset ßÇíßÇ₧ßÇàßÇ║ßÇ¢ßÇ╛ßÇ¡ßÇ₧ßÇ▒ßÇ¼ folder path")
+    class_name: str = Field(..., description="ßÇòßÇàßÇ╣ßÇàßÇèßÇ║ßÇ╕ßÇíßÇ₧ßÇàßÇ║ßüÅ Class ßÇößÇ¼ßÇÖßÇèßÇ║")
+    merge_mode: str = Field("auto", description="'auto' | 'collapse' | 'per_class'")
     epochs: int = 20
     imgsz: int = 640
     batch: int = 16
     lr0: float = 0.001
+    freeze: int = Field(10, description="Backbone layer ßÇüßÇ▓ßÇæßÇ¼ßÇ╕ßÇÖßÇèßÇ╖ßÇ║ßÇíßÇ¢ßÇ▒ßÇíßÇÉßÇ╜ßÇÇßÇ║ (0 = ßÇÖßÇüßÇ▓)")
     run_name: str = "visionsync_master"
 
 
 class DirectFinetuneRequest(BaseModel):
-    base_model: str = Field(..., description="မူလ .pt (ဥပမာ ၈၀ မျိုး) ဖိုင်လမ်းကြောင်း")
+    base_model: str = Field(..., description="ßÇÖßÇ░ßÇ£ .pt (ßÇÑßÇòßÇÖßÇ¼ ßüêßüÇ ßÇÖßÇ╗ßÇ¡ßÇ»ßÇ╕) ßÇûßÇ¡ßÇ»ßÇäßÇ║ßÇ£ßÇÖßÇ║ßÇ╕ßÇÇßÇ╝ßÇ▒ßÇ¼ßÇäßÇ║ßÇ╕")
     run_name: str = "visionsync_master"
     epochs: int = 20
     imgsz: int = 640
     batch: int = 16
     lr0: float = 0.001
+    freeze: int = Field(10, description="Backbone layer ßÇüßÇ▓ßÇæßÇ¼ßÇ╕ßÇÖßÇèßÇ╖ßÇ║ßÇíßÇ¢ßÇ▒ßÇíßÇÉßÇ╜ßÇÇßÇ║ (0 = ßÇÖßÇüßÇ▓)")
 
 
 class ModelInfoRequest(BaseModel):
-    pt_path: str = Field(..., description="Info ကို လိုချင်သော .pt ဖိုင်လမ်းကြောင်း")
+    pt_path: str = Field(..., description="Info ßÇÇßÇ¡ßÇ» ßÇ£ßÇ¡ßÇ»ßÇüßÇ╗ßÇäßÇ║ßÇ₧ßÇ▒ßÇ¼ .pt ßÇûßÇ¡ßÇ»ßÇäßÇ║ßÇ£ßÇÖßÇ║ßÇ╕ßÇÇßÇ╝ßÇ▒ßÇ¼ßÇäßÇ║ßÇ╕")
+
+
+class CocoReplayRequest(BaseModel):
+    source: str = Field("val2017", description="'coco128' (ßüçMBßüè ßÇàßÇÖßÇ║ßÇ╕ßÇ¢ßÇößÇ║) ßÇ₧ßÇ¡ßÇ»ßÇ╖ 'val2017' (ßüêßüÇßüÇMBßüè ßÇÉßÇÇßÇÜßÇ║ßÇ₧ßÇ»ßÇ╢ßÇ╕ßÇ¢ßÇößÇ║)")
+    per_class: int = Field(30, ge=1, le=500, description="COCO class ßÇÉßÇàßÇ║ßÇüßÇ»ßÇ£ßÇ╗ßÇ╛ßÇäßÇ║ ßÇ¢ßÇèßÇ║ßÇÖßÇ╛ßÇößÇ║ßÇ╕ instance ßÇíßÇ¢ßÇ▒ßÇíßÇÉßÇ╜ßÇÇßÇ║")
+    val_ratio: float = Field(0.2, ge=0.0, le=0.9)
+    replace: bool = Field(True, description="ßÇíßÇ¢ßÇäßÇ║ßÇæßÇèßÇ╖ßÇ║ßÇæßÇ¼ßÇ╕ßÇ₧ßÇ▒ßÇ¼ replay ßÇÇßÇ¡ßÇ» ßÇûßÇ╗ßÇÇßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ ßÇíßÇ₧ßÇàßÇ║ßÇæßÇèßÇ╖ßÇ║ßÇÖßÇèßÇ║")
 
 
 _master_finetune_state: Dict[str, Any] = {
@@ -156,89 +170,30 @@ _master_finetune_state: Dict[str, Any] = {
 
 def _master_finetune_run(continuous_finetune_fn: Any) -> None:
     """Run continuous_finetune in background with live progress + logs wired to state."""
-    import re as _re
-
-    epoch_regex_1 = _re.compile(r"Epoch\s+(\d+)\/(\d+)", _re.IGNORECASE)
-    epoch_regex_2 = _re.compile(r"(\d+)\/(\d+)\s*epochs?", _re.IGNORECASE)
-    total_epochs_from_config: int = int(_master_finetune_state.get("total_epochs") or 0)
-
     def _on_progress(epoch: int, total: int) -> None:
-        nonlocal total_epochs_from_config
-        if total and total > 0:
-            total_epochs_from_config = int(total)
-            _master_finetune_state["total_epochs"] = total_epochs_from_config
-        if epoch and epoch > 0:
-            _master_finetune_state["current_epoch"] = epoch
-            _master_finetune_state["progress"] = int(min(100, (epoch / max(1, total_epochs_from_config)) * 100))
+        _master_finetune_state["current_epoch"] = epoch
+        _master_finetune_state["total_epochs"] = total
+        _master_finetune_state["progress"] = int(min(100, (epoch / max(1, total)) * 100))
 
     def _on_log(line: str) -> None:
         _master_finetune_state["logs"].append(line)
-        try:
-            low = line.lower()
-            # Backup: parse epoch progress from Ultralytics log lines
-            # Matches: "Epoch 3/20", " 3/20 Epochs completed", "Epoch: 5 / 10" etc.
-            m = epoch_regex_1.search(line) or epoch_regex_2.search(line)
-            if m:
-                ep = int(m.group(1))
-                tot = int(m.group(2))
-                if tot > 0:
-                    nonlocal total_epochs_from_config
-                    if not total_epochs_from_config or total_epochs_from_config <= 0:
-                        total_epochs_from_config = tot
-                    if _master_finetune_state["total_epochs"] <= 0:
-                        _master_finetune_state["total_epochs"] = tot
-                    if ep > 0:
-                        _master_finetune_state["current_epoch"] = max(
-                            _master_finetune_state["current_epoch"] or 0, ep
-                        )
-                        pct = int(min(100, (ep / max(1, _master_finetune_state["total_epochs"] or tot)) * 100))
-                        if pct > _master_finetune_state["progress"]:
-                            _master_finetune_state["progress"] = pct
-            # Finishing lines
-            if "results saved to" in low or "training complete" in low or "best.pt" in low:
-                _master_finetune_state["progress"] = max(_master_finetune_state["progress"], 95)
-        except Exception:
-            pass
 
-    _master_finetune_state["logs"].append("🚀 Continuous Fine-Tuning စတင်နေပါသည်...")
-    _master_finetune_state["logs"].append(
-        f"ℹ️  Base model: {_master_finetune_state.get('base_model_display') or '(unknown)'} | "
-        f"Target epochs: {total_epochs_from_config}"
-    )
-
-    def _to_rel(p: Optional[str]) -> Optional[str]:
-        if not p:
-            return p
-        try:
-            if os.path.isabs(p):
-                return os.path.relpath(p, BACKEND_DIR).replace("\\", "/")
-            return p.replace("\\", "/")
-        except Exception:
-            return p
-
+    _master_finetune_state["logs"].append("≡ƒÜÇ Continuous Fine-Tuning ßÇàßÇÉßÇäßÇ║ßÇößÇ▒ßÇòßÇ½ßÇ₧ßÇèßÇ║...")
     try:
         res = continuous_finetune_fn(on_log=_on_log, on_progress=_on_progress)
-        bp_rel = _to_rel(res.get("best_pt"))
-        ap_rel = _to_rel(res.get("archived_pt"))
         _master_finetune_state.update({
             "status": "ok" if res["ok"] else "error",
             "message": res["message"],
-            "best_pt": bp_rel,
-            "archived_pt": ap_rel,
+            "best_pt": res.get("best_pt"),
+            "archived_pt": res.get("archived_pt"),
             "total_nc": res.get("total_nc", 0),
             "names": res.get("names", []),
             "finished_at": int(time.time() * 1000),
-            "progress": 100 if res["ok"] else _master_finetune_state["progress"],
         })
-        if res.get("ok"):
-            _on_log("✅ " + (res.get("message") or "Training ပြီးဆုံးပါသည်။"))
-        else:
-            _on_log(f"❌ {res.get('message', 'မအောင်မြင်ပါ။')}")
+        if not res.get("ok"):
+            _on_log(f"Γ¥î {res['message']}")
     except Exception as e:
-        import traceback as _tb
-        _on_log("❌ Unexpected error: " + str(e))
-        for ln in _tb.format_exc().splitlines():
-            _on_log(ln)
+        _on_log(f"Γ¥î Unexpected error: {e}")
         _master_finetune_state.update({
             "status": "error",
             "message": f"Unexpected error: {e}",
@@ -266,15 +221,12 @@ def health_check():
         "status": "ok",
         "model_loaded": not detector.use_fallback,
         "model_name": detector.model_name,
+        # model_loaded=False ßÇåßÇ¡ßÇ»ßÇ¢ßÇäßÇ║ detection ßÇÉßÇ╜ßÇ▒ßÇƒßÇ¼ random fake data ßÇûßÇ╝ßÇàßÇ║ßÇòßÇ½ßÇ₧ßÇèßÇ║ßüï
+        # load_error ßÇÇßÇ¡ßÇ» ßÇÇßÇ╝ßÇèßÇ╖ßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ ßÇíßÇÇßÇ╝ßÇ▒ßÇ¼ßÇäßÇ║ßÇ╕ßÇ¢ßÇäßÇ║ßÇ╕ßÇÇßÇ¡ßÇ» ßÇ₧ßÇ¡ßÇößÇ¡ßÇ»ßÇäßÇ║ßÇ₧ßÇèßÇ║ßüï
+        "load_error": getattr(detector, "load_error", None),
+        "nc": len(getattr(detector, "class_names", []) or []),
+        "class_names": getattr(detector, "class_names", []) or [],
         "current_active_model": training_manager.current_model(),
-        "use_fallback": detector.use_fallback,
-        "model_load_error": detector.load_error,
-        "model_class_count": len(detector.model_classes) if detector.model_classes else 0,
-        "model_classes_sample": (
-            detector.model_classes[:5] + ["..."] + detector.model_classes[-5:]
-            if detector.model_classes and len(detector.model_classes) > 12
-            else (detector.model_classes or [])
-        ),
         "timestamp": int(time.time()),
     }
 
@@ -288,7 +240,7 @@ def detect_objects(req: DetectRequest):
         detections = detector.detect(
             image_base64=req.image,
             mode=req.mode,
-            conf_threshold=0.35,
+            conf_threshold=0.35 if req.conf is None else float(req.conf),
         )
         return {"detections": detections}
     except Exception as e:
@@ -333,43 +285,16 @@ def training_dashboard():
     index_path = os.path.join(TRAINING_UI_DIR, "index.html")
     if not os.path.isfile(index_path):
         return {
-            "message": "Training UI files not found. Visit /training/status for the JSON API.",
+            "message": "Training UI files not found. Visit /docs for the JSON API.",
             "apis": {
-                "status": "/training/status",
-                "start": "POST /training/start",
-                "datasets": "/training/datasets",
                 "models": "/training/models",
-                "upload_dataset": "POST /training/upload-dataset",
                 "activate_model": "POST /training/activate-model",
+                "master_status": "/master/status",
+                "master_info": "/master/info",
+                "start_finetune": "POST /master/start-direct-finetune",
             }
         }
     return FileResponse(index_path, media_type="text/html")
-
-
-@app.get("/training/status")
-def training_status():
-    return training_manager.get_state()
-
-
-@app.get("/training/logs")
-def training_logs(since: Optional[int] = 0):
-    state = training_manager.get_state()
-    logs = state["logs"]
-    start_idx = max(0, int(since or 0))
-    return {
-        "status": state["status"],
-        "progress": state["progress"],
-        "total_lines": len(logs),
-        "new_since": len(logs),
-        "logs": logs[start_idx:],
-        "error": state["error"],
-        "result_weights": state["result_weights"],
-    }
-
-
-@app.get("/training/datasets")
-def list_datasets():
-    return {"datasets": training_manager.list_datasets()}
 
 
 @app.get("/training/models")
@@ -380,29 +305,6 @@ def list_models():
     }
 
 
-@app.post("/training/start")
-def start_training(req: TrainStartRequest):
-    result = training_manager.start_training({
-        "data_yaml_path": req.data_yaml_path,
-        "base_model": req.base_model,
-        "epochs": req.epochs,
-        "img_size": req.img_size,
-        "batch_size": req.batch_size,
-        "run_name": req.run_name,
-    })
-    if not result["ok"]:
-        raise HTTPException(status_code=400, detail=result["error"])
-    return result
-
-
-@app.post("/training/stop")
-def stop_training():
-    result = training_manager.stop_training()
-    if not result["ok"]:
-        raise HTTPException(status_code=400, detail=result["error"])
-    return result
-
-
 @app.post("/training/activate-model")
 def activate_model(req: ActivateModelRequest):
     result = training_manager.activate_model(req.model_path)
@@ -411,43 +313,8 @@ def activate_model(req: ActivateModelRequest):
     return result
 
 
-@app.post("/training/upload-dataset")
-async def upload_dataset(
-    file: UploadFile = File(...),
-    dataset_name: Optional[str] = Form(None),
-):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded")
-    safe_name = dataset_name or (os.path.splitext(os.path.basename(file.filename))[0])
-    safe_name = "".join(c for c in safe_name if c.isalnum() or c in ("-", "_")) or f"dataset_{uuid.uuid4().hex[:8]}"
-    save_path = os.path.join(UPLOADS_DIR, f"{safe_name}_{uuid.uuid4().hex[:8]}.zip")
-    try:
-        with open(save_path, "wb") as out:
-            shutil.copyfileobj(file.file, out)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
-
-    extract_result = training_manager.extract_uploaded_zip(save_path, safe_name)
-    try:
-        os.remove(save_path)
-    except Exception:
-        pass
-
-    if not extract_result["ok"]:
-        raise HTTPException(status_code=500, detail=f"Extract failed: {extract_result.get('error')}")
-
-    ds_list = training_manager.list_datasets()
-    matched = next((d for d in ds_list if d["name"] == safe_name), None)
-    return {
-        "ok": True,
-        "dataset_name": safe_name,
-        "dataset": matched,
-        "hint": "If the dataset is nested inside a subfolder, adjust the data.yaml path accordingly, or move it under dataset/<name>/ directly.",
-    }
-
-
 # ---------------------------------------------------------------------------
-# /master/* — Continuous Fine-Tuning & Master Dataset Management APIs
+# /master/* ΓÇö Continuous Fine-Tuning & Master Dataset Management APIs
 # ---------------------------------------------------------------------------
 
 def _resolve_rel(path: str) -> str:
@@ -468,7 +335,7 @@ def master_merge_dataset(req: MergeDatasetRequest):
     from master_builder import merge_dataset_into_master
     m = _resolve_rel(req.master_root)
     s = _resolve_rel(req.source_root)
-    return merge_dataset_into_master(m, s, req.class_name, req.source_class_ids)
+    return merge_dataset_into_master(m, s, req.class_name, req.source_class_ids, req.merge_mode)
 
 
 @app.post("/master/upload-and-merge")
@@ -478,10 +345,11 @@ async def master_upload_and_merge(
     master_root: str = Form("dataset/master"),
     dataset_name: Optional[str] = Form(None),
     source_class_ids: Optional[str] = Form(None),
+    merge_mode: str = Form("auto"),
 ):
     """
-    Upload လုပ်လိုက်တဲ့ zip file ကို ဖော်ထုတ်ပြီး တိုက်ရိုက် master dataset ထဲ merge လုပ်ပေးတဲ့
-    သက်တောင့်သက်သာ API တစ်ခုဖြစ်ပါတယ်။
+    Upload ßÇ£ßÇ»ßÇòßÇ║ßÇ£ßÇ¡ßÇ»ßÇÇßÇ║ßÇÉßÇ▓ßÇ╖ zip file ßÇÇßÇ¡ßÇ» ßÇûßÇ▒ßÇ¼ßÇ║ßÇæßÇ»ßÇÉßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ ßÇÉßÇ¡ßÇ»ßÇÇßÇ║ßÇ¢ßÇ¡ßÇ»ßÇÇßÇ║ master dataset ßÇæßÇ▓ merge ßÇ£ßÇ»ßÇòßÇ║ßÇòßÇ▒ßÇ╕ßÇÉßÇ▓ßÇ╖
+    ßÇ₧ßÇÇßÇ║ßÇÉßÇ▒ßÇ¼ßÇäßÇ╖ßÇ║ßÇ₧ßÇÇßÇ║ßÇ₧ßÇ¼ API ßÇÉßÇàßÇ║ßÇüßÇ»ßÇûßÇ╝ßÇàßÇ║ßÇòßÇ½ßÇÉßÇÜßÇ║ßüï
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
@@ -491,7 +359,7 @@ async def master_upload_and_merge(
         try:
             ids = [int(x.strip()) for x in source_class_ids.split(",") if x.strip()]
         except Exception:
-            raise HTTPException(status_code=400, detail="source_class_ids ကို 0,1,2 ဒီပုံစံနဲ့ ပို့ပါ")
+            raise HTTPException(status_code=400, detail="source_class_ids ßÇÇßÇ¡ßÇ» 0,1,2 ßÇÆßÇ«ßÇòßÇ»ßÇ╢ßÇàßÇ╢ßÇößÇ▓ßÇ╖ ßÇòßÇ¡ßÇ»ßÇ╖ßÇòßÇ½")
 
     safe_name = dataset_name or (os.path.splitext(os.path.basename(file.filename))[0])
     safe_name = "".join(c for c in safe_name if c.isalnum() or c in ("-", "_")) or f"src_{uuid.uuid4().hex[:8]}"
@@ -502,7 +370,7 @@ async def master_upload_and_merge(
         with open(zip_path, "wb") as out:
             shutil.copyfileobj(file.file, out)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload save မအောင်မြင်ပါ: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload save ßÇÖßÇíßÇ▒ßÇ¼ßÇäßÇ║ßÇÖßÇ╝ßÇäßÇ║ßÇòßÇ½: {e}")
 
     extract_dir = os.path.join(DATASET_DIR, safe_name)
     try:
@@ -513,7 +381,7 @@ async def master_upload_and_merge(
         try:
             shutil.rmtree(extract_dir, ignore_errors=True)
         finally:
-            raise HTTPException(status_code=500, detail=f"Zip extract မအောင်မြင်ပါ: {e}")
+            raise HTTPException(status_code=500, detail=f"Zip extract ßÇÖßÇíßÇ▒ßÇ¼ßÇäßÇ║ßÇÖßÇ╝ßÇäßÇ║ßÇòßÇ½: {e}")
     finally:
         try:
             os.remove(zip_path)
@@ -536,11 +404,11 @@ async def master_upload_and_merge(
     if not source_root:
         return {
             "ok": False,
-            "message": f"Zip ထဲမှာ data.yaml မတွေ့ရှိပါ။ Extract လုပ်ထားတဲ့ folder: {extract_dir}",
+            "message": f"Zip ßÇæßÇ▓ßÇÖßÇ╛ßÇ¼ data.yaml ßÇÖßÇÉßÇ╜ßÇ▒ßÇ╖ßÇ¢ßÇ╛ßÇ¡ßÇòßÇ½ßüï Extract ßÇ£ßÇ»ßÇòßÇ║ßÇæßÇ¼ßÇ╕ßÇÉßÇ▓ßÇ╖ folder: {extract_dir}",
         }
 
     m = _resolve_rel(master_root)
-    return merge_dataset_into_master(m, source_root, class_name, ids)
+    return merge_dataset_into_master(m, source_root, class_name, ids, merge_mode)
 
 
 @app.post("/master/model-info")
@@ -595,15 +463,124 @@ def master_get_info():
     return info
 
 
+_coco_replay_state: Dict[str, Any] = {
+    "status": "idle",
+    "message": "",
+    "progress_logs": [],
+    "result": None,
+    "started_at": None,
+    "finished_at": None,
+}
+
+
+@app.get("/master/replay-status")
+def master_replay_status():
+    """COCO replay ßÇæßÇèßÇ╖ßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ßÇ£ßÇ¼ßÇ╕ / ßÇæßÇèßÇ╖ßÇ║ßÇößÇ▒ßÇåßÇ▓ßÇ£ßÇ¼ßÇ╕ ßÇàßÇàßÇ║ßÇ¢ßÇößÇ║ßüï"""
+    from coco_replay import replay_info
+    from master_builder import MASTER_DIR
+    state = dict(_coco_replay_state)
+    state["info"] = replay_info(MASTER_DIR)
+    return state
+
+
+@app.post("/master/add-coco-replay")
+def master_add_coco_replay(req: CocoReplayRequest):
+    """
+    ßÇÖßÇ░ßÇ£ COCO ßüêßüÇ ßÇÖßÇ╗ßÇ¡ßÇ»ßÇ╕ ßÇÖßÇòßÇ╗ßÇ▒ßÇ¼ßÇÇßÇ║ßÇàßÇ▒ßÇ¢ßÇößÇ║ COCO ßÇòßÇ»ßÇ╢ßÇíßÇüßÇ╗ßÇ¡ßÇ»ßÇ╖ßÇÇßÇ¡ßÇ» master dataset ßÇæßÇ▓ ßÇæßÇèßÇ╖ßÇ║ßÇòßÇ▒ßÇ╕ßÇ₧ßÇèßÇ║ßüï
+
+    Fine-tune ßÇÖßÇ£ßÇ»ßÇòßÇ║ßÇüßÇäßÇ║ ßÇÉßÇàßÇ║ßÇüßÇ½ßÇæßÇèßÇ╖ßÇ║ßÇæßÇ¼ßÇ╕ßÇ¢ßÇ»ßÇ╢ßÇûßÇ╝ßÇäßÇ╖ßÇ║ class ßÇíßÇ₧ßÇàßÇ║ßÇ¢ßÇ▒ßÇ¼ ßÇíßÇƒßÇ▒ßÇ¼ßÇäßÇ║ßÇ╕ßÇ¢ßÇ▒ßÇ¼
+    ßÇÉßÇàßÇ║ßÇòßÇ╝ßÇ¡ßÇ»ßÇäßÇ║ßÇÉßÇèßÇ║ßÇ╕ ßÇ₧ßÇäßÇ║ßÇÜßÇ░ßÇ₧ßÇ╜ßÇ¼ßÇ╕ßÇÖßÇèßÇ║ßüï Background ßÇÖßÇ╛ßÇ¼ run ßÇòßÇ╝ßÇ«ßÇ╕ /master/replay-status
+    ßÇûßÇ╝ßÇäßÇ╖ßÇ║ ßÇàßÇàßÇ║ßÇößÇ¡ßÇ»ßÇäßÇ║ßÇ₧ßÇèßÇ║ßüï
+    """
+    from coco_replay import SOURCES, add_coco_replay
+    from master_builder import MASTER_DIR
+
+    if req.source not in SOURCES:
+        raise HTTPException(status_code=400,
+                            detail=f"source ßÇÖßÇÖßÇ╛ßÇößÇ║ßÇòßÇ½: {req.source} (ßÇ¢ßÇößÇ¡ßÇ»ßÇäßÇ║ßÇ₧ßÇèßÇ║: {list(SOURCES)})")
+    if _coco_replay_state["status"] == "running":
+        raise HTTPException(status_code=409, detail="COCO replay ßÇæßÇèßÇ╖ßÇ║ßÇößÇ▒ßÇåßÇ▓ßÇûßÇ╝ßÇàßÇ║ßÇòßÇ½ßÇÉßÇÜßÇ║ßüï")
+    if _master_finetune_state["status"] == "running":
+        raise HTTPException(status_code=409,
+                            detail="Training ßÇ£ßÇ»ßÇòßÇ║ßÇößÇ▒ßÇåßÇ▓ßÇÖßÇ╛ßÇ¼ dataset ßÇÇßÇ¡ßÇ» ßÇÖßÇòßÇ╝ßÇ▒ßÇ¼ßÇäßÇ║ßÇ╕ßÇ₧ßÇäßÇ╖ßÇ║ßÇòßÇ½ßüï ßÇòßÇ╝ßÇ«ßÇ╕ßÇÖßÇ╛ ßÇ£ßÇ»ßÇòßÇ║ßÇòßÇ½ßüï")
+
+    def _runner() -> None:
+        _coco_replay_state.update({
+            "status": "running",
+            "message": f"{req.source} ßÇÇßÇ¡ßÇ» ßÇæßÇèßÇ╖ßÇ║ßÇößÇ▒ßÇòßÇ½ßÇ₧ßÇèßÇ║...",
+            "progress_logs": [],
+            "result": None,
+            "started_at": int(time.time() * 1000),
+            "finished_at": None,
+        })
+
+        def _log(line: str) -> None:
+            _coco_replay_state["progress_logs"].append(line)
+            _coco_replay_state["message"] = line
+
+        try:
+            res = add_coco_replay(
+                master_root=MASTER_DIR,
+                source=req.source,
+                per_class=req.per_class,
+                val_ratio=req.val_ratio,
+                replace=req.replace,
+                on_log=_log,
+            )
+            _coco_replay_state.update({
+                "status": "ok" if res.get("ok") else "error",
+                "message": res.get("message", ""),
+                "result": res,
+                "finished_at": int(time.time() * 1000),
+            })
+        except Exception as e:
+            _coco_replay_state.update({
+                "status": "error",
+                "message": f"Unexpected error: {e}",
+                "finished_at": int(time.time() * 1000),
+            })
+
+    threading.Thread(target=_runner, daemon=True).start()
+    return {
+        "ok": True,
+        "message": (
+            f"COCO replay ({req.source}) ßÇæßÇèßÇ╖ßÇ║ßÇÉßÇ¼ßÇÇßÇ¡ßÇ» background ßÇÖßÇ╛ßÇ¼ ßÇàßÇÉßÇäßÇ║ßÇ£ßÇ¡ßÇ»ßÇÇßÇ║ßÇòßÇ½ßÇòßÇ╝ßÇ«ßüï "
+            "/master/replay-status ßÇûßÇ╝ßÇäßÇ╖ßÇ║ ßÇàßÇàßÇ║ßÇåßÇ▒ßÇ╕ßÇòßÇ½ßüï"
+        ),
+        "approx_mb": SOURCES[req.source]["approx_mb"],
+    }
+
+
+@app.delete("/master/coco-replay")
+def master_remove_coco_replay():
+    """Master ßÇæßÇ▓ßÇÇ COCO replay ßÇûßÇ¡ßÇ»ßÇäßÇ║ßÇÖßÇ╗ßÇ¼ßÇ╕ßÇÇßÇ¡ßÇ» ßÇûßÇ╗ßÇÇßÇ║ßÇòßÇ▒ßÇ╕ßÇ₧ßÇèßÇ║ßüï"""
+    from coco_replay import remove_existing_replay
+    from master_builder import MASTER_DIR
+    if _master_finetune_state["status"] == "running":
+        raise HTTPException(status_code=409, detail="Training ßÇ£ßÇ»ßÇòßÇ║ßÇößÇ▒ßÇåßÇ▓ßÇòßÇ½ßüï ßÇòßÇ╝ßÇ«ßÇ╕ßÇÖßÇ╛ ßÇ£ßÇ»ßÇòßÇ║ßÇòßÇ½ßüï")
+    n = remove_existing_replay(MASTER_DIR)
+    return {"ok": True, "removed_files": n, "message": f"replay ßÇûßÇ¡ßÇ»ßÇäßÇ║ {n} ßÇüßÇ» ßÇûßÇ╗ßÇÇßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ßÇòßÇ½ßÇòßÇ╝ßÇ«ßüï"}
+
+
+@app.get("/master/audit")
+def master_audit():
+    """
+    Master dataset ßÇæßÇ▓ class ßÇÉßÇàßÇ║ßÇüßÇ»ßÇüßÇ╗ßÇäßÇ║ßÇ╕ label ßÇÿßÇÜßÇ║ßÇößÇ╛ßÇàßÇ║ßÇüßÇ»ßÇ¢ßÇ╛ßÇ¡ßÇ£ßÇ▓ ßÇ¢ßÇ▒ßÇÉßÇ╜ßÇÇßÇ║ßÇòßÇ╝ßÇòßÇ▒ßÇ╕ßÇ₧ßÇèßÇ║ßüï
+    Fine-tune ßÇÖßÇ£ßÇ»ßÇòßÇ║ßÇüßÇäßÇ║ "ßÇÿßÇÜßÇ║ class ßÇÉßÇ╜ßÇ▒ ßÇòßÇ╗ßÇ▒ßÇ¼ßÇÇßÇ║ßÇ₧ßÇ╜ßÇ¼ßÇ╕ßÇÖßÇ£ßÇ▓" ßÇÇßÇ¡ßÇ» ßÇÇßÇ╝ßÇ¡ßÇ»ßÇ₧ßÇ¡ßÇ¢ßÇößÇ║ßüï
+    """
+    from master_builder import MASTER_DIR, audit_master_coverage
+    return audit_master_coverage(os.path.join(MASTER_DIR, "data.yaml"))
+
+
 @app.get("/master/download-model")
 def master_download_model(path: str):
     import urllib.parse
     decoded = urllib.parse.unquote(path)
     abs_path = _resolve_rel(decoded)
     if not os.path.isfile(abs_path):
-        raise HTTPException(status_code=404, detail=f".pt ဖိုင်မတွေ့ရှိပါ: {decoded}")
+        raise HTTPException(status_code=404, detail=f".pt ßÇûßÇ¡ßÇ»ßÇäßÇ║ßÇÖßÇÉßÇ╜ßÇ▒ßÇ╖ßÇ¢ßÇ╛ßÇ¡ßÇòßÇ½: {decoded}")
     if not abs_path.lower().endswith(".pt"):
-        raise HTTPException(status_code=400, detail="download လုပ်လို့ရတာ .pt ဖိုင်သာဖြစ်ပါတယ်")
+        raise HTTPException(status_code=400, detail="download ßÇ£ßÇ»ßÇòßÇ║ßÇ£ßÇ¡ßÇ»ßÇ╖ßÇ¢ßÇÉßÇ¼ .pt ßÇûßÇ¡ßÇ»ßÇäßÇ║ßÇ₧ßÇ¼ßÇûßÇ╝ßÇàßÇ║ßÇòßÇ½ßÇÉßÇÜßÇ║")
     fname = os.path.basename(abs_path)
     return FileResponse(abs_path, filename=fname, media_type="application/octet-stream")
 
@@ -611,8 +588,8 @@ def master_download_model(path: str):
 @app.post("/master/start-finetune")
 def master_start_finetune(req: ContinueFinetuneRequest):
     """
-    တစ်ခါတည်း: master dataset အလိုအလျောက်တည်ဆောက် → class ထည့် → dataset merge
-    → base .pt မှ fine-tune ပြုလုပ်ပြီး .pt အသစ်တစ်ခုတည်း (class ၈၀+အသစ်) ထွက်လာစေသည်။
+    ßÇÉßÇàßÇ║ßÇüßÇ½ßÇÉßÇèßÇ║ßÇ╕: master dataset ßÇíßÇ£ßÇ¡ßÇ»ßÇíßÇ£ßÇ╗ßÇ▒ßÇ¼ßÇÇßÇ║ßÇÉßÇèßÇ║ßÇåßÇ▒ßÇ¼ßÇÇßÇ║ ΓåÆ class ßÇæßÇèßÇ╖ßÇ║ ΓåÆ dataset merge
+    ΓåÆ base .pt ßÇÖßÇ╛ fine-tune ßÇòßÇ╝ßÇ»ßÇ£ßÇ»ßÇòßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ .pt ßÇíßÇ₧ßÇàßÇ║ßÇÉßÇàßÇ║ßÇüßÇ»ßÇÉßÇèßÇ║ßÇ╕ (class ßüêßüÇ+ßÇíßÇ₧ßÇàßÇ║) ßÇæßÇ╜ßÇÇßÇ║ßÇ£ßÇ¼ßÇàßÇ▒ßÇ₧ßÇèßÇ║ßüï
     """
     from master_builder import (
         MASTER_DIR,
@@ -623,32 +600,30 @@ def master_start_finetune(req: ContinueFinetuneRequest):
     )
 
     if _master_finetune_state["status"] == "running":
-        raise HTTPException(status_code=409, detail="Continuous Fine-Tuning လုပ်နေဆဲဖြစ်ပါတယ်။ ပြီးသွားမှ ထပ်လုပ်ပါ။")
+        raise HTTPException(status_code=409, detail="Continuous Fine-Tuning ßÇ£ßÇ»ßÇòßÇ║ßÇößÇ▒ßÇåßÇ▓ßÇûßÇ╝ßÇàßÇ║ßÇòßÇ½ßÇÉßÇÜßÇ║ßüï ßÇòßÇ╝ßÇ«ßÇ╕ßÇ₧ßÇ╜ßÇ¼ßÇ╕ßÇÖßÇ╛ ßÇæßÇòßÇ║ßÇ£ßÇ»ßÇòßÇ║ßÇòßÇ½ßüï")
 
     base_pt = _resolve_rel(req.base_model)
     source_root = _resolve_rel(req.source_root)
     if not os.path.isfile(base_pt):
-        raise HTTPException(status_code=400, detail=f"Base .pt မတွေ့ရှိပါ: {base_pt}")
+        raise HTTPException(status_code=400, detail=f"Base .pt ßÇÖßÇÉßÇ╜ßÇ▒ßÇ╖ßÇ¢ßÇ╛ßÇ¡ßÇòßÇ½: {base_pt}")
     if not os.path.isdir(source_root):
-        raise HTTPException(status_code=400, detail=f"Source folder မတွေ့ရှိပါ: {source_root}")
+        raise HTTPException(status_code=400, detail=f"Source folder ßÇÖßÇÉßÇ╜ßÇ▒ßÇ╖ßÇ¢ßÇ╛ßÇ¡ßÇòßÇ½: {source_root}")
 
     info = extract_model_info(base_pt)
     if not info.get("ok"):
-        raise HTTPException(status_code=400, detail=f"Base model info မရနိုင်ပါ: {info.get('message')}")
+        raise HTTPException(status_code=400, detail=f"Base model info ßÇÖßÇ¢ßÇößÇ¡ßÇ»ßÇäßÇ║ßÇòßÇ½: {info.get('message')}")
 
     _ensure_master_structure(MASTER_DIR)
     master_yaml = os.path.join(MASTER_DIR, "data.yaml")
 
-    merge_res = merge_dataset_into_master(MASTER_DIR, source_root, req.class_name)
+    merge_res = merge_dataset_into_master(MASTER_DIR, source_root, req.class_name, None, req.merge_mode)
     if not merge_res["ok"]:
-        raise HTTPException(status_code=500, detail=f"Dataset merge မအောင်မြင်ပါ: {merge_res['message']}")
-
-    base_display = req.base_model
+        raise HTTPException(status_code=500, detail=f"Dataset merge ßÇÖßÇíßÇ▒ßÇ¼ßÇäßÇ║ßÇÖßÇ╝ßÇäßÇ║ßÇòßÇ½: {merge_res['message']}")
 
     def _runner() -> None:
         _master_finetune_state.update({
             "status": "running",
-            "message": f"{merge_res['message']} | Fine-tuning စတင်နေပါသည်...",
+            "message": f"{merge_res['message']} | Fine-tuning ßÇàßÇÉßÇäßÇ║ßÇößÇ▒ßÇòßÇ½ßÇ₧ßÇèßÇ║...",
             "best_pt": None,
             "archived_pt": None,
             "total_nc": info.get("nc", 0),
@@ -659,7 +634,6 @@ def master_start_finetune(req: ContinueFinetuneRequest):
             "total_epochs": int(req.epochs),
             "started_at": int(time.time() * 1000),
             "finished_at": None,
-            "base_model_display": base_display,
         })
         _master_finetune_run(lambda **cb: continuous_finetune(
             base_model_path=base_pt,
@@ -668,6 +642,7 @@ def master_start_finetune(req: ContinueFinetuneRequest):
             imgsz=req.imgsz,
             batch=req.batch,
             lr0=req.lr0,
+            freeze=req.freeze,
             run_name=req.run_name,
             **cb,
         ))
@@ -677,7 +652,7 @@ def master_start_finetune(req: ContinueFinetuneRequest):
 
     return {
         "ok": True,
-        "message": "Continuous Fine-Tuning အလုပ်ကို background မှာ စတင်လိုက်ပါပြီ။ /master/status ဖြင့် စစ်ဆေးပါ။",
+        "message": "Continuous Fine-Tuning ßÇíßÇ£ßÇ»ßÇòßÇ║ßÇÇßÇ¡ßÇ» background ßÇÖßÇ╛ßÇ¼ ßÇàßÇÉßÇäßÇ║ßÇ£ßÇ¡ßÇ»ßÇÇßÇ║ßÇòßÇ½ßÇòßÇ╝ßÇ«ßüï /master/status ßÇûßÇ╝ßÇäßÇ╖ßÇ║ ßÇàßÇàßÇ║ßÇåßÇ▒ßÇ╕ßÇòßÇ½ßüï",
         "base_nc": info.get("nc"),
         "merge": merge_res,
     }
@@ -686,9 +661,9 @@ def master_start_finetune(req: ContinueFinetuneRequest):
 @app.post("/master/start-direct-finetune")
 def master_start_direct_finetune(req: DirectFinetuneRequest):
     """
-    Master dataset ကို အသုံးပြုပြီး (သုံးသပ်ပြီးသား Merges များအားလုံးပါဝင်ပြီးပြီ)
-    base .pt ဖြင့် Continuous Fine-Tune ကို တိုက်ရိုက် စတင်ပေးသည်။
-    အသုံးပြုသူသည် အရင်က zip upload+merge ပြီးပြီဆိုရင် ဒီ endpoint ကို သုံးပါ။
+    Master dataset ßÇÇßÇ¡ßÇ» ßÇíßÇ₧ßÇ»ßÇ╢ßÇ╕ßÇòßÇ╝ßÇ»ßÇòßÇ╝ßÇ«ßÇ╕ (ßÇ₧ßÇ»ßÇ╢ßÇ╕ßÇ₧ßÇòßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ßÇ₧ßÇ¼ßÇ╕ Merges ßÇÖßÇ╗ßÇ¼ßÇ╕ßÇíßÇ¼ßÇ╕ßÇ£ßÇ»ßÇ╢ßÇ╕ßÇòßÇ½ßÇ¥ßÇäßÇ║ßÇòßÇ╝ßÇ«ßÇ╕ßÇòßÇ╝ßÇ«)
+    base .pt ßÇûßÇ╝ßÇäßÇ╖ßÇ║ Continuous Fine-Tune ßÇÇßÇ¡ßÇ» ßÇÉßÇ¡ßÇ»ßÇÇßÇ║ßÇ¢ßÇ¡ßÇ»ßÇÇßÇ║ ßÇàßÇÉßÇäßÇ║ßÇòßÇ▒ßÇ╕ßÇ₧ßÇèßÇ║ßüï
+    ßÇíßÇ₧ßÇ»ßÇ╢ßÇ╕ßÇòßÇ╝ßÇ»ßÇ₧ßÇ░ßÇ₧ßÇèßÇ║ ßÇíßÇ¢ßÇäßÇ║ßÇÇ zip upload+merge ßÇòßÇ╝ßÇ«ßÇ╕ßÇòßÇ╝ßÇ«ßÇåßÇ¡ßÇ»ßÇ¢ßÇäßÇ║ ßÇÆßÇ« endpoint ßÇÇßÇ¡ßÇ» ßÇ₧ßÇ»ßÇ╢ßÇ╕ßÇòßÇ½ßüï
     """
     from master_builder import (
         MASTER_DIR,
@@ -699,25 +674,23 @@ def master_start_direct_finetune(req: DirectFinetuneRequest):
     import os as _os
 
     if _master_finetune_state["status"] == "running":
-        raise HTTPException(status_code=409, detail="Continuous Fine-Tuning လုပ်နေဆဲဖြစ်ပါတယ်။")
+        raise HTTPException(status_code=409, detail="Continuous Fine-Tuning ßÇ£ßÇ»ßÇòßÇ║ßÇößÇ▒ßÇåßÇ▓ßÇûßÇ╝ßÇàßÇ║ßÇòßÇ½ßÇÉßÇÜßÇ║ßüï")
 
     base_pt = _resolve_rel(req.base_model)
     if not _os.path.isfile(base_pt):
-        raise HTTPException(status_code=400, detail=f"Base .pt မတွေ့ရှိပါ: {base_pt}")
+        raise HTTPException(status_code=400, detail=f"Base .pt ßÇÖßÇÉßÇ╜ßÇ▒ßÇ╖ßÇ¢ßÇ╛ßÇ¡ßÇòßÇ½: {base_pt}")
 
     info = extract_model_info(base_pt)
     if not info.get("ok"):
-        raise HTTPException(status_code=400, detail=f"Base model info မရနိုင်ပါ: {info.get('message')}")
+        raise HTTPException(status_code=400, detail=f"Base model info ßÇÖßÇ¢ßÇößÇ¡ßÇ»ßÇäßÇ║ßÇòßÇ½: {info.get('message')}")
 
     _ensure_master_structure(MASTER_DIR)
     master_yaml = _os.path.join(MASTER_DIR, "data.yaml")
 
-    base_display_direct = req.base_model
-
-    def _runner_direct() -> None:
+    def _runner() -> None:
         _master_finetune_state.update({
             "status": "running",
-            "message": "Dataset များ merge ပြီးသားဖြစ်ပါသည်။ Fine-tuning စတင်နေပါသည်...",
+            "message": "Dataset ßÇÖßÇ╗ßÇ¼ßÇ╕ merge ßÇòßÇ╝ßÇ«ßÇ╕ßÇ₧ßÇ¼ßÇ╕ßÇûßÇ╝ßÇàßÇ║ßÇòßÇ½ßÇ₧ßÇèßÇ║ßüï Fine-tuning ßÇàßÇÉßÇäßÇ║ßÇößÇ▒ßÇòßÇ½ßÇ₧ßÇèßÇ║...",
             "best_pt": None,
             "archived_pt": None,
             "total_nc": info.get("nc", 0),
@@ -728,7 +701,6 @@ def master_start_direct_finetune(req: DirectFinetuneRequest):
             "total_epochs": int(req.epochs),
             "started_at": int(time.time() * 1000),
             "finished_at": None,
-            "base_model_display": base_display_direct,
         })
         _master_finetune_run(lambda **cb: continuous_finetune(
             base_model_path=base_pt,
@@ -737,16 +709,17 @@ def master_start_direct_finetune(req: DirectFinetuneRequest):
             imgsz=req.imgsz,
             batch=req.batch,
             lr0=req.lr0,
+            freeze=req.freeze,
             run_name=req.run_name,
             **cb,
         ))
 
-    t = threading.Thread(target=_runner_direct, daemon=True)
+    t = threading.Thread(target=_runner, daemon=True)
     t.start()
 
     return {
         "ok": True,
-        "message": "Continuous Fine-Tuning အလုပ်ကို background မှာ စတင်လိုက်ပါပြီ။ /master/status ဖြင့် စစ်ဆေးပါ။",
+        "message": "Continuous Fine-Tuning ßÇíßÇ£ßÇ»ßÇòßÇ║ßÇÇßÇ¡ßÇ» background ßÇÖßÇ╛ßÇ¼ ßÇàßÇÉßÇäßÇ║ßÇ£ßÇ¡ßÇ»ßÇÇßÇ║ßÇòßÇ½ßÇòßÇ╝ßÇ«ßüï /master/status ßÇûßÇ╝ßÇäßÇ╖ßÇ║ ßÇàßÇàßÇ║ßÇåßÇ▒ßÇ╕ßÇòßÇ½ßüï",
         "base_nc": info.get("nc"),
         "master_yaml": master_yaml,
     }
@@ -755,10 +728,10 @@ def master_start_direct_finetune(req: DirectFinetuneRequest):
 if __name__ == "__main__":
     ip = get_local_ip()
     print("\n" + "=" * 70)
-    print("🚀 VisionSync AI Backend Server Started!")
-    print(f"📱 Connect from Mobile Phone: http://{ip}:8000")
-    print(f"🌐 Localhost:               http://localhost:8000")
-    print(f"📄 Swagger API Docs:        http://{ip}:8000/docs")
-    print(f"🧠 Training Dashboard:      http://{ip}:8000/training")
+    print("≡ƒÜÇ VisionSync AI Backend Server Started!")
+    print(f"≡ƒô▒ Connect from Mobile Phone: http://{ip}:8000")
+    print(f"≡ƒîÉ Localhost:               http://localhost:8000")
+    print(f"≡ƒôä Swagger API Docs:        http://{ip}:8000/docs")
+    print(f"≡ƒºá Training Dashboard:      http://{ip}:8000/training")
     print("=" * 70 + "\n")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

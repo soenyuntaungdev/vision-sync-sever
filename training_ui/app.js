@@ -4,14 +4,21 @@
   const API_BASE = "";
   const $ = (id) => document.getElementById(id);
 
+  const statusBadge = $("statusBadge");
   const modelsListEl = $("modelsList");
   const logBox = $("logBox");
   const tailLogsCb = $("tailLogs");
 
+  let mSince = 0;
+  let mStartedAt = null;
+  let mPollTimer = null;
+  let mDurationTimer = null;
+  let mLastStartedAt = null;
+
   // Master-specific elements
   const mZipFileInput = $("mZipFile");
   const mZipFileName = $("mZipFileName");
-  const mFilePicker = document.querySelector(".tab-panel[data-panel=master] .file-picker");
+  const mFilePicker = document.querySelector(".tab-panel .file-picker");
   const mUploadForm = $("mUploadForm");
   const mUploadBtn = $("mUploadBtn");
   const mUploadMsg = $("mUploadMsg");
@@ -20,6 +27,12 @@
   const mRefreshMasterBtn = $("mRefreshMasterBtn");
   const mMasterInfo = $("mMasterInfo");
   const mMasterBadge = $("mMasterBadge");
+  const mReplaySource = $("mReplaySource");
+  const mReplayPerClass = $("mReplayPerClass");
+  const mReplayBtn = $("mReplayBtn");
+  const mReplayRemoveBtn = $("mReplayRemoveBtn");
+  const mReplayBadge = $("mReplayBadge");
+  const mReplayMsg = $("mReplayMsg");
   const mBaseModel = $("mBaseModel");
   const mStartBtn = $("mStartBtn");
   const mProgressFill = $("mProgressFill");
@@ -29,12 +42,6 @@
   const mResultPt = $("mResultPt");
   const mActivateBtn = $("mActivateBtn");
   const mDownloadBtn = $("mDownloadBtn");
-
-  let mSince = 0;
-  let mStartedAt = null;
-  let mPollTimer = null;
-  let mDurationTimer = null;
-  let mLastStartedAt = null;
 
   const M_STATUS_LABELS = {
     idle: "အနားယူနေသည်",
@@ -92,11 +99,15 @@
     } catch (e) { return ""; }
   }
 
-  function samePath(a, b) {
-    if (!a || !b) return false;
-    const norm = (s) => String(s).trim().toLowerCase().replace(/\\/g, "/").replace(/^[./]+/, "");
-    const na = norm(a), nb = norm(b);
-    return na === nb || na.endsWith("/" + nb) || nb.endsWith("/" + na);
+  function setStatus(s) {
+    statusBadge.textContent = M_STATUS_LABELS[s] || s;
+    const cls = {
+      idle: "badge-idle",
+      running: "badge-running",
+      ok: "badge-completed",
+      error: "badge-failed",
+    }[s] || "badge-idle";
+    statusBadge.className = "badge " + cls;
   }
 
   function classifyLine(line) {
@@ -155,8 +166,7 @@
       models.forEach((m) => {
         const o = document.createElement("option");
         o.value = m.path;
-        const aMatch = samePath(active, m.path) || samePath(active, m.name);
-        o.textContent = `${m.name} · ${fmtKB(m.size_kb)}${aMatch ? " · ACTIVE" : ""}`;
+        o.textContent = `${m.name} · ${fmtKB(m.size_kb)}${active === m.path || active === m.name ? " · ACTIVE" : ""}`;
         mBaseModel.appendChild(o);
       });
       if (prevSel) {
@@ -170,7 +180,7 @@
       }
       modelsListEl.innerHTML = "";
       models.forEach((m) => {
-        const isActive = active && (samePath(m.path, active) || samePath(m.name, active));
+        const isActive = active && (m.path === active || m.name === active);
         const row = document.createElement("div");
         row.className = "model-item" + (isActive ? " active" : "");
         row.innerHTML = `
@@ -192,7 +202,7 @@
         const btn = row.querySelector("button");
         if (!isActive) {
           btn.addEventListener("click", async () => {
-            if (!confirm(`"${m.name}" ကို active model အဖြစ်သတ်မှတ်မှာသေချာပါသလား?`)) return;
+            if (!confirm(`"${m.name}" ကို active model အဖြစ် သတ်မှတ်မှာ သေချာပါသလား?`)) return;
             try {
               btn.disabled = true;
               const r = await api("/training/activate-model", {
@@ -200,10 +210,8 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ model_path: m.path }),
               });
-              setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပြီ။", r.ok !== false ? "ok" : "err");
-              await refreshModels();
-              setTimeout(refreshModels, 500);
-              setTimeout(refreshModels, 1500);
+              setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပါပြီ။", "ok");
+              setTimeout(refreshModels, 300);
             } catch (e) {
               setMsg(mUploadMsg, "Activate မအောင်မြင် — " + e.message, "err");
             } finally {
@@ -384,52 +392,167 @@
   }
 
   // ---------------------------------------------------------------------
-  // Master tab — Tab switching, Upload+Merge, Master info refresh,
-  //              start fine-tune, polling, activate+download
+  // Master — Master info refresh, Upload+Merge, start fine-tune,
+  //          polling, activate+download
   // ---------------------------------------------------------------------
-  function switchTab(name) {
-    document.querySelectorAll(".tab").forEach((t) => {
-      const on = t.dataset.tab === name;
-      t.classList.toggle("is-active", on);
-      t.setAttribute("aria-selected", on ? "true" : "false");
-    });
-    document.querySelectorAll(".tab-panel").forEach((p) => {
-      p.hidden = p.dataset.panel !== name;
+  // ---- Stepper ----
+  const mStep = { replay: false, newClass: false, training: false, result: false };
+
+  function updateStepper() {
+    const states = [
+      mStep.replay ? "is-done" : "is-active",
+      mStep.newClass ? "is-done" : (mStep.replay ? "is-active" : ""),
+      mStep.result ? "is-done" : (mStep.training ? "is-active" : (mStep.newClass ? "is-active" : "")),
+      mStep.result ? "is-active" : "",
+    ];
+    document.querySelectorAll("#mStepper .step").forEach((el, i) => {
+      el.classList.remove("is-done", "is-active");
+      if (states[i]) el.classList.add(states[i]);
     });
   }
 
   async function loadMasterInfo() {
     try {
       const info = await api("/master/info");
-      mMasterBadge.textContent = `nc=${info.nc}`;
-      mMasterBadge.classList.remove("tab-badge-dim");
+      const audit = await api("/master/audit").catch(() => null);
+
       const tr = info.images_train || 0;
       const vl = info.images_val || 0;
       const names = info.names || [];
-      const newest = names.length > 80 ? names.slice(80) : names.slice(Math.max(0, names.length - 15));
+      const newClasses = names.filter((c) => c.id >= 80);
+      const emptyCount = audit && Array.isArray(audit.empty_classes) ? audit.empty_classes.length : null;
+
+      mStep.newClass = newClasses.length > 0;
+      updateStepper();
+
+      mMasterBadge.textContent = `nc=${info.nc}`;
+      mMasterBadge.classList.remove("tab-badge-dim");
+
+      // label မရှိသော class များ = fine-tune ပြီးရင် ပျောက်သွားမည့် class များ
+      let emptyCls = "is-ok", emptyTxt = "—";
+      if (emptyCount !== null) {
+        emptyTxt = String(emptyCount);
+        emptyCls = emptyCount === 0 ? "is-ok" : (emptyCount > 40 ? "is-warn" : "");
+      }
 
       let html = `
-        <div class="m-master-info-grid">
-          <div><span class="m-k">Total Classes (nc)</span><div class="m-v">${info.nc}</div></div>
-          <div><span class="m-k">Images</span><div class="m-v">train ${tr} · val ${vl}</div></div>
-          <div><span class="m-k">YAML Path</span><div class="m-v">${escapeHtml(info.yaml_path)}</div></div>
-          <div><span class="m-k">Master Dir</span><div class="m-v">${escapeHtml(info.master_dir)}</div></div>
+        <div class="m-stat-strip">
+          <div class="m-stat">
+            <span class="m-stat-k">Total Classes</span>
+            <span class="m-stat-v">${info.nc}
+              <span class="m-stat-sub">${newClasses.length ? `+${newClasses.length} အသစ်` : ""}</span>
+            </span>
+          </div>
+          <div class="m-stat">
+            <span class="m-stat-k">Images</span>
+            <span class="m-stat-v">${tr + vl}
+              <span class="m-stat-sub">${tr}/${vl}</span>
+            </span>
+          </div>
+          <div class="m-stat">
+            <span class="m-stat-k">Label မရှိသော class</span>
+            <span class="m-stat-v ${emptyCls}">${emptyTxt}</span>
+          </div>
         </div>
-        <div class="m-master-class-tags">
       `;
-      if (names.length > 80) {
-        html += `<span class="m-class-chip">0-79 · COCO 80 မျိုး</span>`;
+
+      if (emptyCount !== null && emptyCount > 40) {
+        html += `<p class="card-note"><b class="note-warn">သတိပြုရန်</b> — class ${emptyCount} ခုမှာ label မရှိပါ။
+                 ဒီအတိုင်း train ရင် အဲဒီ class တွေ ပျောက်သွားပါမည်။ အဆင့် ၁ (COCO Replay) ကို အရင်လုပ်ပါ။</p>`;
       }
-      newest.forEach((c) => {
-        const isNew = c.id >= 80;
-        html += `<span class="m-class-chip ${isNew ? "m-new" : ""}">${c.id}: ${escapeHtml(c.name)}</span>`;
+
+      html += `<div class="m-master-class-tags">`;
+      if (names.length > 80) html += `<span class="m-class-chip">0–79 · COCO ၈၀ မျိုး</span>`;
+      const shown = newClasses.length ? newClasses : names.slice(Math.max(0, names.length - 10));
+      shown.forEach((c) => {
+        const n = audit && audit.counts ? audit.counts[c.name] : undefined;
+        const cnt = n === undefined ? "" : ` · ${n}`;
+        html += `<span class="m-class-chip ${c.id >= 80 ? "m-new" : ""}">${c.id}: ${escapeHtml(c.name)}${cnt}</span>`;
       });
       html += `</div>`;
+      html += `<div class="m-path-line" title="${escapeAttr(info.yaml_path)}">${escapeHtml(info.yaml_path)}</div>`;
       mMasterInfo.innerHTML = html;
     } catch (e) {
       mMasterInfo.textContent = "Master info မရနိုင်ပါ — " + e.message;
       mMasterBadge.textContent = "error";
       mMasterBadge.classList.remove("tab-badge-dim");
+    }
+  }
+
+  // ---- COCO Replay (အဟောင်း ၈၀ မျိုး မပျောက်စေရန်) ----
+  let mReplayPollTimer = null;
+
+  function applyReplayState(st) {
+    const info = st.info || {};
+    if (st.status === "running") {
+      mReplayBadge.textContent = "ထည့်နေသည်...";
+      mReplayBadge.classList.remove("tab-badge-dim");
+      setMsg(mReplayMsg, st.message || "လုပ်ဆောင်နေသည်...", "ok");
+      mReplayBtn.disabled = true;
+      return;
+    }
+    mReplayBtn.disabled = false;
+    if (info.present) {
+      mReplayBadge.textContent = `${info.source} · ${(info.images_train || 0) + (info.images_val || 0)} ပုံ`;
+      mReplayBadge.classList.remove("tab-badge-dim");
+    } else {
+      mReplayBadge.textContent = "မထည့်ရသေး";
+      mReplayBadge.classList.add("tab-badge-dim");
+    }
+    mStep.replay = !!info.present;
+    updateStepper();
+    if (st.status === "ok") setMsg(mReplayMsg, st.message || "ပြီးပါပြီ။", "ok");
+    else if (st.status === "error") setMsg(mReplayMsg, "မအောင်မြင် — " + (st.message || ""), "err");
+  }
+
+  async function pollReplayOnce() {
+    try {
+      const st = await api("/master/replay-status");
+      if (Array.isArray(st.progress_logs) && st.progress_logs.length) {
+        setMsg(mReplayMsg, st.progress_logs[st.progress_logs.length - 1], "ok");
+      }
+      applyReplayState(st);
+      if (st.status !== "running") {
+        if (mReplayPollTimer) { clearInterval(mReplayPollTimer); mReplayPollTimer = null; }
+        loadMasterInfo();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function onReplayAdd() {
+    const source = mReplaySource.value;
+    const per_class = Number(mReplayPerClass.value) || 30;
+    const warn = source === "val2017"
+      ? "\n\nval2017 က ~၈၀၀MB download လုပ်ပါမည် (ပထမတစ်ခါသာ)။"
+      : "";
+    if (!confirm(`COCO replay (${source}) ကို master ထဲ ထည့်မှာ သေချာပါသလား?${warn}`)) return;
+    try {
+      mReplayBtn.disabled = true;
+      const r = await api("/master/add-coco-replay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, per_class }),
+      });
+      setMsg(mReplayMsg, r.message || "စတင်လိုက်ပါပြီ။", "ok");
+      if (!mReplayPollTimer) mReplayPollTimer = setInterval(pollReplayOnce, 2000);
+      pollReplayOnce();
+    } catch (e) {
+      setMsg(mReplayMsg, "မအောင်မြင် — " + e.message, "err");
+      mReplayBtn.disabled = false;
+    }
+  }
+
+  async function onReplayRemove() {
+    if (!confirm("Master ထဲက COCO replay ပုံများကို ဖျက်မှာ သေချာပါသလား?")) return;
+    try {
+      const r = await api("/master/coco-replay", { method: "DELETE" });
+      setMsg(mReplayMsg, r.message || "ဖျက်ပြီးပါပြီ။", "ok");
+      await pollReplayOnce();
+      await loadMasterInfo();
+    } catch (e) {
+      setMsg(mReplayMsg, "ဖျက်လို့မရပါ — " + e.message, "err");
     }
   }
 
@@ -466,6 +589,7 @@
   function applyMasterStatus(st) {
     const s = st.status || "idle";
     const label = M_STATUS_LABELS[s] || s;
+    setStatus(s);
     let pct = 0;
     if (s === "ok") pct = 100;
     else if (s === "running") pct = Math.max(0, Math.min(100, Math.round(st.progress || 0)));
@@ -502,6 +626,10 @@
         mStatusLine.textContent = "အဆင့် (၁) Upload → (၂) Merge → (၃) Start လုပ်ပါ။";
       }
     }
+
+    mStep.training = s === "running";
+    mStep.result = s === "ok" && !!st.best_pt;
+    updateStepper();
 
     if (s === "ok" && st.best_pt) {
       mResultRow.hidden = false;
@@ -582,6 +710,7 @@
       imgsz: Number($("mImgsz").value),
       batch: Number($("mBatch").value),
       lr0: Number($("mLr0").value),
+      freeze: Number($("mFreeze").value),
     };
 
     try {
@@ -615,10 +744,8 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model_path: p }),
       });
-      setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပြီ။", "ok");
-      await refreshModels();
-      setTimeout(refreshModels, 600);
-      setTimeout(refreshModels, 1800);
+      setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပါပြီ။", "ok");
+      setTimeout(refreshModels, 400);
     } catch (e) {
       setMsg(mUploadMsg, "Activate မအောင်မြင် — " + e.message, "err");
     } finally {
@@ -644,19 +771,15 @@
   function escapeAttr(s) { return escapeHtml(s); }
 
   function bind() {
-    // Tab switching
-    document.querySelectorAll(".tab").forEach((t) => {
-      t.addEventListener("click", () => switchTab(t.dataset.tab));
-    });
-
     $("refreshModels").addEventListener("click", refreshModels);
     $("clearLogsBtn").addEventListener("click", () => { logBox.innerHTML = ""; mSince = 0; });
 
-    // Master
     mZipFileInput.addEventListener("change", onPickMasterZip);
     mUploadForm.addEventListener("submit", onMasterUpload);
     if (mFilePicker) dragDrop(mFilePicker, mZipFileInput, onPickMasterZip);
     mRefreshMasterBtn.addEventListener("click", loadMasterInfo);
+    mReplayBtn.addEventListener("click", onReplayAdd);
+    mReplayRemoveBtn.addEventListener("click", onReplayRemove);
     mStartBtn.addEventListener("click", onMasterStart);
     mActivateBtn.addEventListener("click", onMasterActivate);
     mDownloadBtn.addEventListener("click", onMasterDownload);
@@ -673,8 +796,10 @@
       }
       if (mInit.status === "running") startMasterPolling();
     }
+
     refreshModels();
     loadMasterInfo();
+    pollReplayOnce();
   }
 
   document.addEventListener("DOMContentLoaded", init);
