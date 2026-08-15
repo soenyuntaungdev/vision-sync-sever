@@ -19,7 +19,7 @@ UPLOADS_DIR = os.path.join(BACKEND_DIR, "uploads")
 # Active model ßÇÇßÇ¡ßÇ» source code (main.py) ßÇæßÇ▓ ßÇòßÇ╝ßÇößÇ║ßÇ¢ßÇ▒ßÇ╕ßÇÖßÇèßÇ╖ßÇ║ßÇíßÇàßÇ¼ßÇ╕ ßÇñ JSON ßÇæßÇ▓ ßÇÖßÇ╛ßÇÉßÇ║ßÇ₧ßÇèßÇ║ßüï
 # Server restart / Colab cell ßÇòßÇ╝ßÇößÇ║ run ßÇ£ßÇ»ßÇòßÇ║ßÇ£ßÇèßÇ║ßÇ╕ ßÇíßÇ₧ßÇÇßÇ║ßÇ¥ßÇäßÇ║ßÇößÇ▒ßÇàßÇ▒ßÇ¢ßÇößÇ║ßüï
 ACTIVE_MODEL_FILE = os.path.join(BACKEND_DIR, "active_model.json")
-DEFAULT_MODEL = "yolov8m-oiv7.pt"
+DEFAULT_MODEL = "yolov8m.pt"
 
 os.makedirs(DATASET_DIR, exist_ok=True)
 os.makedirs(RUNS_DIR, exist_ok=True)

@@ -84,7 +84,7 @@ class ObjectDetector:
     automatically if model weights are unavailable or PyTorch/Ultralytics is absent.
     """
 
-    def __init__(self, model_name: str = "yolov8m-oiv7.pt", allow_fallback: bool = True):
+    def __init__(self, model_name: str = "yolov8m.pt", allow_fallback: bool = True):
         self.model_name = model_name
         self.model = None
         self.use_fallback = False
@@ -125,6 +125,7 @@ class ObjectDetector:
         """
         Computes the effective allowed class set for a given mode, taking into account
         the model class list so that custom (non-COCO) classes are always permitted.
+        Case-insensitive matching is used to support both COCO (lowercase) and Open Images (Capitalized).
 
         Returns None when no filter should be applied (mode=general, or no overlap).
         """
@@ -133,12 +134,19 @@ class ObjectDetector:
             return None
         if not model_names:
             return base
-        custom_names = model_names - COCO_CLASS_NAMES
-        allowed = set(base) | custom_names
-        if not (model_names & allowed):
-            # Model has no classes matching this mode -> show all rather than nothing
+
+        base_lower = {n.lower() for n in base}
+        coco_lower = {n.lower() for n in COCO_CLASS_NAMES}
+        model_names_lower = {n.lower() for n in model_names}
+
+        custom_names = model_names_lower - coco_lower
+        allowed_lower = base_lower | custom_names
+
+        if not (model_names_lower & allowed_lower):
             return None
-        return allowed
+
+        # Return exact model class names whose lowercase matches allowed_lower
+        return {n for n in model_names if n.lower() in allowed_lower}
 
     def decode_base64_image(self, base64_str: str) -> Optional[Image.Image]:
         """
@@ -205,7 +213,7 @@ class ObjectDetector:
                         cls_name = result.names.get(cls_id_num, f"class_{cls_id_num}")
                         confidence = float(box.conf[0].item())
 
-                        if allowed_classes is not None and cls_name not in allowed_classes:
+                        if allowed_classes is not None and cls_name not in allowed_classes and cls_name.lower() not in {a.lower() for a in allowed_classes}:
                             continue
 
                         # Extract absolute bounding box (xywh)
