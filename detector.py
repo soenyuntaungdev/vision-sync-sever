@@ -35,44 +35,40 @@ COCO_CLASS_NAMES: Set[str] = {
 MODE_CLASSES: Dict[str, Optional[Set[str]]] = {
     "general": None,  # All classes (no filter)
     "security": {
-        # People & personal items
-        "person",
-        "backpack",
-        "handbag", "handbag_(purse)",
-        "suitcase", "suitcase_(luggage)",
-        # Weapons / tools
-        "knife", "knife_(kitchen_utensil)",
-        "scissors",
-        # Electronics
-        "cell phone", "cellular_telephone", "mobile_phone",
-        # Vehicles
-        "car", "car_(automobile)",
-        "motorcycle", "motorbike",
-        "bicycle",
-        "truck", "truck_(vehicle)",
-        "bus", "bus_(vehicle)",
+        # People
+        "person", "man", "woman", "boy", "girl",
+        # Bags & luggage
+        "backpack", "handbag", "briefcase", "suitcase", "luggage and bags", "plastic bag", "box",
+        # Weapons & dangerous items
+        "handgun", "rifle", "shotgun", "weapon", "knife", "kitchen knife", "dagger", "sword",
+        "axe", "scissors", "bomb", "missile", "rocket", "cannon", "bow and arrow", "torch",
+        # Vehicles & surveillance
+        "car", "motorcycle", "bicycle", "truck", "bus", "van", "vehicle", "land vehicle", "taxi",
+        "ambulance", "camera", "door", "window",
+        # Personal electronics & accessories
+        "mobile phone", "cell phone", "laptop", "tablet computer", "hat", "sunglasses", "glasses",
     },
     "industrial": {
-        # Heavy vehicles
-        "truck", "truck_(vehicle)",
-        "bus", "bus_(vehicle)",
-        "train",
-        # Furniture / fixtures
-        "bench",
-        "chair",
-        # Tools
-        "scissors",
-        "knife", "knife_(kitchen_utensil)",
-        # Appliances
-        "oven", "oven_(kitchen_appliance)",
-        "microwave", "microwave_oven",
-        "toaster",
-        "refrigerator",
-        # Electronics / equipment
-        "laptop", "laptop_computer",
-        "keyboard", "computer_keyboard",
-        "bottle",
-        "fire hydrant", "fire_hydrant",
+        # Heavy vehicles & transport
+        "truck", "bus", "train", "van", "vehicle", "land vehicle", "cart", "tire", "golf cart",
+        "segway", "snowplow", "auto part", "wheel", "wheelchair",
+        # Construction & workshop tools
+        "tool", "drill (tool)", "hammer", "wrench", "screwdriver", "chainsaw", "chisel", "axe",
+        "knife", "kitchen knife", "scissors", "nail (construction)", "paper cutter", "torch",
+        "grinder", "spatula",
+        # Safety gear & PPE
+        "helmet", "bicycle helmet", "football helmet", "goggles", "glasses", "glove", "boot",
+        "footwear", "seat belt", "personal flotation device",
+        # Work environment, fixtures & obstacles
+        "ladder", "stairs", "chair", "stool", "bench", "table", "desk", "door", "door handle",
+        "window", "window blind", "sink", "power plugs and sockets", "light switch", "light bulb",
+        "flashlight", "fire hydrant", "waste container", "container", "barrel", "tin can", "box",
+        "plumbing fixture", "tap", "traffic sign", "traffic light", "street light",
+        # Appliances, machinery & electronics
+        "gas stove", "wood-burning stove", "heater", "mechanical fan", "ceiling fan", "oven",
+        "microwave oven", "microwave", "refrigerator", "dishwasher", "washing machine", "scale",
+        "pressure cooker", "tank", "laptop", "computer keyboard", "keyboard", "computer monitor",
+        "computer mouse", "mobile phone", "corded phone", "telephone", "camera", "bottle",
     },
 }
 
