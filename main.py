@@ -22,6 +22,7 @@ from training_manager import (
     TrainingManager,
     read_active_model,
 )
+from vlm_assistant import VLMAssistant
 
 app = FastAPI(
     title="VisionSync AI Backend Server",
@@ -46,6 +47,7 @@ if os.path.isdir(TRAINING_UI_DIR):
 # ßÇñßÇößÇèßÇ║ßÇ╕ßÇûßÇ╝ßÇäßÇ╖ßÇ║ activate ßÇ£ßÇ»ßÇòßÇ║ßÇæßÇ¼ßÇ╕ßÇ₧ßÇ▒ßÇ¼ model ßÇ₧ßÇèßÇ║ server restart ßÇòßÇ╝ßÇ«ßÇ╕ßÇ£ßÇèßÇ║ßÇ╕ ßÇåßÇÇßÇ║ßÇíßÇ₧ßÇÇßÇ║ßÇ¥ßÇäßÇ║ßÇößÇ▒ßÇÖßÇèßÇ║ßüï
 detector = ObjectDetector(model_name=read_active_model())
 training_manager = TrainingManager()
+vlm_assistant = VLMAssistant()
 
 REPORTS_FILE = os.path.join(BACKEND_DIR, "reports_log.json")
 
@@ -100,6 +102,15 @@ class ReportRequest(BaseModel):
 
 class ActivateModelRequest(BaseModel):
     model_path: str
+
+
+class VLMDescribeRequest(BaseModel):
+    image: str = Field(..., description="Base64 encoded image frame")
+
+
+class VLMQueryRequest(BaseModel):
+    image: str = Field(..., description="Base64 encoded image frame")
+    question: str = Field(..., description="Natural language question about the image")
 
 
 class AddClassRequest(BaseModel):
@@ -245,6 +256,24 @@ def detect_objects(req: DetectRequest):
         return {"detections": detections}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
+
+
+@app.post("/vlm/describe")
+def vlm_describe(req: VLMDescribeRequest):
+    """
+    Vision-Language Model (VLM) Scene Description Endpoint.
+    Analyzes the image and returns a natural language description.
+    """
+    return vlm_assistant.describe_scene(req.image)
+
+
+@app.post("/vlm/query")
+def vlm_query(req: VLMQueryRequest):
+    """
+    Vision-Language Model (VLM) Visual Question Answering (VQA) Endpoint.
+    Answers any user question about the image.
+    """
+    return vlm_assistant.ask_question(req.image, req.question)
 
 
 @app.post("/reports")

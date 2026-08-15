@@ -8,6 +8,10 @@ runs/
 models/
 uploads/
 
+# Model weights — repo size limit ထက် ကျော်လွန်ပါသည် (GitHub limit: 100MB)
+*.pt
+weights/
+
 # COCO replay download cache (ပြန် download လုပ်လို့ရသည် — repo ထဲ မထည့်ရ)
 .cache/
 
