@@ -66,7 +66,7 @@ class DetectRequest(BaseModel):
     mode: str = Field("general", description="Detection mode: 'general' | 'security' | 'industrial'")
     conf: Optional[float] = Field(
         None,
-        description="Confidence threshold (default 0.35). Custom model ßÇíßÇ₧ßÇàßÇ║ßÇÉßÇ╜ßÇ▒ßÇÇ confidence ßÇößÇ¡ßÇÖßÇ╖ßÇ║ßÇÉßÇÉßÇ║ßÇ£ßÇ¡ßÇ»ßÇ╖ 0.15 ßÇ£ßÇ▒ßÇ¼ßÇÇßÇ║ßÇößÇ▓ßÇ╖ ßÇàßÇÖßÇ║ßÇ╕ßÇÇßÇ╝ßÇèßÇ╖ßÇ║ßÇößÇ¡ßÇ»ßÇäßÇ║ßÇ₧ßÇèßÇ║ßüï",
+        description="Confidence threshold (default 0.20).",
         ge=0.0,
         le=1.0,
     )
@@ -240,7 +240,7 @@ def detect_objects(req: DetectRequest):
         detections = detector.detect(
             image_base64=req.image,
             mode=req.mode,
-            conf_threshold=0.35 if req.conf is None else float(req.conf),
+            conf_threshold=0.20 if req.conf is None else float(req.conf),
         )
         return {"detections": detections}
     except Exception as e:

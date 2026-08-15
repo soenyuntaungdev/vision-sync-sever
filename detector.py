@@ -84,7 +84,7 @@ class ObjectDetector:
     automatically if model weights are unavailable or PyTorch/Ultralytics is absent.
     """
 
-    def __init__(self, model_name: str = "yolov8m.pt", allow_fallback: bool = True):
+    def __init__(self, model_name: str = "yolov8m-oiv7.pt", allow_fallback: bool = True):
         self.model_name = model_name
         self.model = None
         self.use_fallback = False
@@ -162,7 +162,7 @@ class ObjectDetector:
             logger.error(f"Failed to decode base64 image: {e}")
             return None
 
-    def detect(self, image_base64: str, mode: str = "general", conf_threshold: float = 0.35) -> List[Dict[str, Any]]:
+    def detect(self, image_base64: str, mode: str = "general", conf_threshold: float = 0.20) -> List[Dict[str, Any]]:
         """
         Runs object detection on the base64 image and returns normalized BoundingBoxes
         matching the VisionSync frontend schema:
