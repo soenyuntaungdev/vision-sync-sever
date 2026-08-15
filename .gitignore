@@ -1,7 +1,9 @@
 __pycache__/
 *.pyc
 
-# Runtime artifacts — repo ထဲ မထည့်ရ
+# Runtime artifacts & secrets — repo ထဲ မထည့်ရ
+.env
+*.env
 active_model.json
 reports_log.json
 runs/

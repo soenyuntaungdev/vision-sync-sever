@@ -247,22 +247,50 @@ def detect_objects(req: DetectRequest):
     if not req.image:
         raise HTTPException(status_code=400, detail="Image base64 string is required")
 
+    conf_th = 0.35 if req.conf is None else float(req.conf)
+    mode_str = (req.mode or "general").lower()
+
     try:
+        # If explicitly requested gemini/vlm mode, use Google Gemini Vision
+        if mode_str in ("gemini", "vlm", "cloud"):
+            detections = vlm_assistant.detect_objects(req.image, conf_threshold=conf_th)
+            return {"detections": detections}
+
         detections = detector.detect(
             image_base64=req.image,
             mode=req.mode,
-            conf_threshold=0.35 if req.conf is None else float(req.conf),
+            conf_threshold=conf_th,
         )
+
+        # If local model is fallback and Gemini is available, use Gemini Vision for accurate results
+        if getattr(detector, "use_fallback", False) and vlm_assistant.is_configured:
+            cloud_detections = vlm_assistant.detect_objects(req.image, conf_threshold=conf_th)
+            if cloud_detections:
+                return {"detections": cloud_detections}
+
         return {"detections": detections}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
 
 
+@app.post("/vlm/detect", response_model=DetectResponse)
+def vlm_detect(req: DetectRequest):
+    """
+    Direct Gemini Vision Object Detection Endpoint.
+    Detects objects and returns normalized bounding boxes using Google Gemini Vision.
+    """
+    if not req.image:
+        raise HTTPException(status_code=400, detail="Image base64 string is required")
+    conf_th = 0.35 if req.conf is None else float(req.conf)
+    detections = vlm_assistant.detect_objects(req.image, conf_threshold=conf_th)
+    return {"detections": detections}
+
+
 @app.post("/vlm/describe")
 def vlm_describe(req: VLMDescribeRequest):
     """
-    Vision-Language Model (VLM) Scene Description Endpoint.
-    Analyzes the image and returns a natural language description.
+    Vision-Language Model (VLM) Scene Description Endpoint via Google Gemini Vision.
+    Analyzes the image and returns a natural language description in Myanmar language.
     """
     return vlm_assistant.describe_scene(req.image)
 
@@ -270,8 +298,8 @@ def vlm_describe(req: VLMDescribeRequest):
 @app.post("/vlm/query")
 def vlm_query(req: VLMQueryRequest):
     """
-    Vision-Language Model (VLM) Visual Question Answering (VQA) Endpoint.
-    Answers any user question about the image.
+    Vision-Language Model (VLM) Visual Question Answering (VQA) Endpoint via Google Gemini Vision.
+    Answers any user question about the image in Myanmar language.
     """
     return vlm_assistant.ask_question(req.image, req.question)
 
