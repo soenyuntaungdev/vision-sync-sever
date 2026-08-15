@@ -4,30 +4,9 @@
   const API_BASE = "";
   const $ = (id) => document.getElementById(id);
 
-  const statusBadge = $("statusBadge");
-  const statusLine = $("statusLine");
-  const durationText = $("durationText");
-  const progressFill = $("progressFill");
-  const startBtn = $("startBtn");
-  const stopBtn = $("stopBtn");
-  const datasetsListEl = $("datasetsList");
   const modelsListEl = $("modelsList");
   const logBox = $("logBox");
   const tailLogsCb = $("tailLogs");
-  const zipFileInput = $("zipFile");
-  const zipFileName = $("zipFileName");
-  const filePicker = document.querySelector(".tab-panel[data-panel=classic] .file-picker");
-  const uploadForm = $("uploadForm");
-  const uploadMsg = $("uploadMsg");
-  const uploadBtn = $("uploadBtn");
-  const datasetNameInput = $("datasetName");
-  const dataYamlInput = $("dataYaml");
-
-  let since = 0;
-  let startedAt = null;
-  let pollTimer = null;
-  let durationTimer = null;
-  let selectedDatasetYaml = null;
 
   // Master-specific elements
   const mZipFileInput = $("mZipFile");
@@ -56,15 +35,6 @@
   let mPollTimer = null;
   let mDurationTimer = null;
   let mLastStartedAt = null;
-
-  const STATUS_LABELS = {
-    idle: "အနားယူနေသည်",
-    running: "လေ့လာနေသည်…",
-    completed: "အောင်မြင်ပြီးပြီ",
-    failed: "အမှားဖြစ်နေသည်",
-    stopping: "ရပ်ဆိုင်းနေသည်…",
-    stopped: "ရပ်ပြီးသည်",
-  };
 
   const M_STATUS_LABELS = {
     idle: "အနားယူနေသည်",
@@ -122,11 +92,11 @@
     } catch (e) { return ""; }
   }
 
-  function setStatus(s) {
-    statusBadge.textContent = STATUS_LABELS[s] || s;
-    statusBadge.className = "badge badge-" + (s || "idle");
-    startBtn.disabled = (s === "running" || s === "stopping");
-    stopBtn.disabled = (s !== "running" && s !== "stopping");
+  function samePath(a, b) {
+    if (!a || !b) return false;
+    const norm = (s) => String(s).trim().toLowerCase().replace(/\\/g, "/").replace(/^[./]+/, "");
+    const na = norm(a), nb = norm(b);
+    return na === nb || na.endsWith("/" + nb) || nb.endsWith("/" + na);
   }
 
   function classifyLine(line) {
@@ -151,116 +121,6 @@
     logBox.appendChild(frag);
     if (tailLogsCb.checked) {
       logBox.scrollTop = logBox.scrollHeight;
-    }
-  }
-
-  function applyStatusState(st) {
-    setStatus(st.status);
-    const pct = Math.max(0, Math.min(100, Math.round(st.progress || 0)));
-    progressFill.style.width = pct + "%";
-    if (progressFill.parentElement && progressFill.parentElement.classList.contains("progress-bar")) {
-      progressFill.parentElement.dataset.pct = String(pct);
-    }
-    if (st.started_at) startedAt = st.started_at * 1000;
-    if (st.status === "running" || st.status === "stopping") {
-      if (!durationTimer) {
-        durationTimer = setInterval(() => {
-          const end = (st.finished_at ? st.finished_at * 1000 : Date.now());
-          durationText.textContent = fmtDuration(startedAt ? (end - startedAt) : 0);
-        }, 500);
-      }
-    } else {
-      if (durationTimer) { clearInterval(durationTimer); durationTimer = null; }
-      if (startedAt) {
-        const end = (st.finished_at ? st.finished_at * 1000 : startedAt);
-        durationText.textContent = fmtDuration(end - startedAt);
-      } else {
-        durationText.textContent = "00:00:00";
-      }
-    }
-
-    statusLine.classList.remove("has-result", "has-error");
-    if (st.status === "completed") {
-      statusLine.textContent = st.result_weights
-        ? "အောင်မြင်သည် — Best weights: " + st.result_weights
-        : "အောင်မြင်ပြီးပြီ (weights ရလဒ် မတွေ့ရပါ)";
-      statusLine.classList.add("has-result");
-    } else if (st.status === "failed") {
-      statusLine.textContent = "အမှားဖြစ်နေသည် — " + (st.error || "Logs ကိုကြည့်ပါ");
-      statusLine.classList.add("has-error");
-    } else if (st.status === "stopped") {
-      statusLine.textContent = "User က ရပ်ဆိုင်းထားသည်။";
-    } else if (st.status === "stopping") {
-      statusLine.textContent = "ရပ်ဆိုင်းနေသည်… ထိုက်တန်မှရပ်မည်။";
-    } else if (st.status === "running") {
-      statusLine.textContent = `Training လုပ်နေသည် · ${pct}% ပြီးစီး (သတိထားပါ — CPU/GPU ပေါ်မူတည်ပြီး ကြာနိုင်ပါသည်)`;
-    } else {
-      statusLine.textContent = "ကျေးဇူးပြု၍ dataset တစ်ခုရွေးပြီး Start နှိပ်ပါ။";
-    }
-  }
-
-  async function pollOnce() {
-    try {
-      const l = await api(`/training/logs?since=${encodeURIComponent(since)}`);
-      if (l && Array.isArray(l.logs) && l.logs.length) {
-        appendLogs(l.logs);
-        since = l.new_since;
-      }
-      const st = await api("/training/status");
-      applyStatusState(st);
-      if (st.status === "completed" || st.status === "failed" || st.status === "stopped") {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-        refreshModels();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(pollOnce, 1200);
-    pollOnce();
-  }
-
-  async function loadDatasets() {
-    datasetsListEl.innerHTML = '<div class="muted">Loading datasets...</div>';
-    try {
-      const data = await api("/training/datasets");
-      const list = data.datasets || [];
-      if (!list.length) {
-        datasetsListEl.innerHTML = '<div class="muted">Dataset မတွေ့ရပါ။ ZIP file upload လုပ်ပါ သို့မဟုတ် backend/dataset/ အောက်သို့ ကိုယ်တိုင်ထည့်ပါ။</div>';
-        selectedDatasetYaml = null;
-        return;
-      }
-      datasetsListEl.innerHTML = "";
-      list.forEach((d, i) => {
-        const row = document.createElement("label");
-        row.className = "dataset-item";
-        if (selectedDatasetYaml === d.yaml_path) row.classList.add("active");
-        row.innerHTML = `
-          <input type="radio" name="ds" value="${escapeAttr(d.yaml_path)}" ${selectedDatasetYaml === d.yaml_path ? "checked" : ""} />
-          <div class="dataset-info">
-            <div class="dataset-name" data-full-name="${escapeAttr(d.name)}" title="${escapeAttr(d.name)}">${escapeHtml(d.name)}</div>
-            <div class="dataset-meta" title="${escapeAttr(d.yaml_path)}">yaml: ${escapeHtml(d.yaml_path)} · Classes: ${d.class_count < 0 ? "?" : d.class_count}</div>
-          </div>
-        `;
-        const radio = row.querySelector("input");
-        radio.addEventListener("change", () => {
-          document.querySelectorAll(".dataset-item").forEach((el) => el.classList.remove("active"));
-          row.classList.add("active");
-          selectedDatasetYaml = d.yaml_path;
-          dataYamlInput.value = d.yaml_path;
-          if (!datasetNameInput.value) datasetNameInput.value = d.name;
-        });
-        datasetsListEl.appendChild(row);
-        if (i === 0 && !selectedDatasetYaml) {
-          radio.checked = true;
-          radio.dispatchEvent(new Event("change"));
-        }
-      });
-    } catch (e) {
-      datasetsListEl.innerHTML = `<div class="muted">Failed to load datasets: ${escapeHtml(e.message)}</div>`;
     }
   }
 
@@ -295,7 +155,8 @@
       models.forEach((m) => {
         const o = document.createElement("option");
         o.value = m.path;
-        o.textContent = `${m.name} · ${fmtKB(m.size_kb)}${active === m.path || active === m.name ? " · ACTIVE" : ""}`;
+        const aMatch = samePath(active, m.path) || samePath(active, m.name);
+        o.textContent = `${m.name} · ${fmtKB(m.size_kb)}${aMatch ? " · ACTIVE" : ""}`;
         mBaseModel.appendChild(o);
       });
       if (prevSel) {
@@ -309,7 +170,7 @@
       }
       modelsListEl.innerHTML = "";
       models.forEach((m) => {
-        const isActive = active && (m.path === active || m.name === active);
+        const isActive = active && (samePath(m.path, active) || samePath(m.name, active));
         const row = document.createElement("div");
         row.className = "model-item" + (isActive ? " active" : "");
         row.innerHTML = `
@@ -331,7 +192,7 @@
         const btn = row.querySelector("button");
         if (!isActive) {
           btn.addEventListener("click", async () => {
-            if (!confirm(`"${m.name}" ကို active model အဖြစ်သတ်မှတ်မှာသေချာပါသလား? Backend ကို restart လုပ်ရပါမည်။`)) return;
+            if (!confirm(`"${m.name}" ကို active model အဖြစ်သတ်မှတ်မှာသေချာပါသလား?`)) return;
             try {
               btn.disabled = true;
               const r = await api("/training/activate-model", {
@@ -339,10 +200,12 @@
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ model_path: m.path }),
               });
-              setMsg(uploadMsg, r.message || "Activate ဖြစ်သွားပြီ။ Backend restart လုပ်ပြီးမှ load လုပ်မည်။", "ok");
-              setTimeout(refreshModels, 300);
+              setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပြီ။", r.ok !== false ? "ok" : "err");
+              await refreshModels();
+              setTimeout(refreshModels, 500);
+              setTimeout(refreshModels, 1500);
             } catch (e) {
-              setMsg(uploadMsg, "Activate မအောင်မြင် — " + e.message, "err");
+              setMsg(mUploadMsg, "Activate မအောင်မြင် — " + e.message, "err");
             } finally {
               btn.disabled = false;
             }
@@ -352,66 +215,6 @@
       });
     } catch (e) {
       modelsListEl.innerHTML = `<div class="muted">Failed to load models: ${escapeHtml(e.message)}</div>`;
-    }
-  }
-
-  async function startTraining() {
-    const data_yaml_path = dataYamlInput.value.trim();
-    if (!data_yaml_path) {
-      setMsg(uploadMsg, "data.yaml path ထည့်ပါ သို့မဟုတ် dataset တစ်ခုရွေးပါ", "err");
-      return;
-    }
-    const payload = {
-      data_yaml_path,
-      base_model: $("baseModel").value,
-      epochs: Number($("epochs").value),
-      img_size: Number($("imgSize").value),
-      batch_size: Number($("batchSize").value),
-      run_name: $("runName").value.trim() || "visionsync_custom",
-    };
-    try {
-      startBtn.disabled = true;
-      setMsg(uploadMsg, "Training စတင်နေသည်...", "ok");
-      logBox.innerHTML = "";
-      since = 0;
-      const r = await api("/training/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      setMsg(uploadMsg, r.message || "Started", "ok");
-      startPolling();
-    } catch (e) {
-      setMsg(uploadMsg, "Start မအောင်မြင် — " + e.message, "err");
-      startBtn.disabled = false;
-    }
-  }
-
-  async function stopTraining() {
-    if (!confirm("Training ကို ရပ်ဆိုင်းမှာ သေချာပါသလား?")) return;
-    try {
-      stopBtn.disabled = true;
-      const r = await api("/training/stop", { method: "POST", headers: { "Content-Type": "application/json" } });
-      setMsg(uploadMsg, r.message || "Stop signal ပို့ပြီးပြီ", "ok");
-      setTimeout(pollOnce, 500);
-    } catch (e) {
-      setMsg(uploadMsg, "Stop မအောင်မြင် — " + e.message, "err");
-      stopBtn.disabled = false;
-    }
-  }
-
-  function onPickZip(e) {
-    const f = e.target.files && e.target.files[0];
-    if (f) {
-      zipFileName.textContent = f.name + " · " + fmtKB(f.size / 1024);
-      filePicker.classList.add("has-file");
-      if (!datasetNameInput.value) {
-        datasetNameInput.value = smartDatasetNameFromZip(f.name);
-        datasetNameInput.title = datasetNameInput.value;
-      }
-    } else {
-      zipFileName.textContent = "ZIP ဖိုင်ကိုရွေးပါ သို့မဟုတ် drag & drop လုပ်ပါ";
-      filePicker.classList.remove("has-file");
     }
   }
 
@@ -578,34 +381,6 @@
         onChangeFn({ target: input });
       }
     });
-  }
-
-  async function onUpload(e) {
-    e.preventDefault();
-    const f = zipFileInput.files && zipFileInput.files[0];
-    if (!f) { setMsg(uploadMsg, "ZIP ဖိုင်ကိုရွေးပါ", "err"); return; }
-    const fd = new FormData();
-    fd.append("file", f);
-    if (datasetNameInput.value.trim()) fd.append("dataset_name", datasetNameInput.value.trim());
-    try {
-      uploadBtn.disabled = true;
-      uploadBtn.textContent = "Upload နေသည်...";
-      setMsg(uploadMsg, "Upload + Extract လုပ်နေသည်...", "ok");
-      const r = await api("/training/upload-dataset", { method: "POST", body: fd });
-      setMsg(uploadMsg, (r.ok ? "အောင်မြင်သည်" : "") + " · " + (r.dataset ? "Dataset တွေ့ရှိသည်" : "") + " · " + (r.hint || ""), r.ok ? "ok" : "err");
-      if (r.dataset && r.dataset.yaml_path) {
-        selectedDatasetYaml = r.dataset.yaml_path;
-        dataYamlInput.value = r.dataset.yaml_path;
-      }
-      await loadDatasets();
-      zipFileInput.value = "";
-      onPickZip({ target: zipFileInput });
-    } catch (e) {
-      setMsg(uploadMsg, "Upload မအောင်မြင် — " + e.message, "err");
-    } finally {
-      uploadBtn.disabled = false;
-      uploadBtn.textContent = "Upload လုပ်မည်";
-    }
   }
 
   // ---------------------------------------------------------------------
@@ -840,8 +615,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model_path: p }),
       });
-      setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပြီ။ Backend restart လုပ်ပြီးမှအလုပ်လုပ်မည်။", "ok");
-      setTimeout(refreshModels, 400);
+      setMsg(mUploadMsg, r.message || "Activate ဖြစ်သွားပြီ။", "ok");
+      await refreshModels();
+      setTimeout(refreshModels, 600);
+      setTimeout(refreshModels, 1800);
     } catch (e) {
       setMsg(mUploadMsg, "Activate မအောင်မြင် — " + e.message, "err");
     } finally {
@@ -872,14 +649,8 @@
       t.addEventListener("click", () => switchTab(t.dataset.tab));
     });
 
-    startBtn.addEventListener("click", startTraining);
-    stopBtn.addEventListener("click", stopTraining);
-    $("refreshDatasets").addEventListener("click", loadDatasets);
     $("refreshModels").addEventListener("click", refreshModels);
-    $("clearLogsBtn").addEventListener("click", () => { logBox.innerHTML = ""; since = 0; });
-    zipFileInput.addEventListener("change", onPickZip);
-    uploadForm.addEventListener("submit", onUpload);
-    dragDrop(filePicker, zipFileInput, onPickZip);
+    $("clearLogsBtn").addEventListener("click", () => { logBox.innerHTML = ""; mSince = 0; });
 
     // Master
     mZipFileInput.addEventListener("change", onPickMasterZip);
@@ -893,11 +664,6 @@
 
   async function init() {
     bind();
-    const initial = await api("/training/status").catch(() => null);
-    if (initial) {
-      applyStatusState(initial);
-      if (initial.status === "running" || initial.status === "stopping") startPolling();
-    }
     const mInit = await api("/master/status").catch(() => null);
     if (mInit) {
       applyMasterStatus(mInit);
@@ -907,7 +673,6 @@
       }
       if (mInit.status === "running") startMasterPolling();
     }
-    loadDatasets();
     refreshModels();
     loadMasterInfo();
   }

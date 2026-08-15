@@ -23,115 +23,15 @@
   </header>
 
   <nav class="tabs" role="tablist">
-    <button class="tab is-active" data-tab="classic" role="tab" aria-selected="true">
-      <span class="tab-ico">🎯</span>
-      <span>သမားရိုးကျ Training</span>
-    </button>
-    <button class="tab" data-tab="master" role="tab" aria-selected="false">
+    <button class="tab is-active" data-tab="master" role="tab" aria-selected="true">
       <span class="tab-ico">🧩</span>
       <span>Master Builder (ပစ္စည်းအသစ် + .pt ပေါင်းထည့်)</span>
-      <span id="masterBadge" class="tab-badge">✨ ဗဟုသုတ</span>
     </button>
   </nav>
 
   <main class="layout">
     <section class="col col-left">
-      <div class="tab-panel" data-panel="classic">
-        <div class="sub-grid">
-          <div class="sub-col">
-            <div class="card card-upload">
-              <div class="card-title">
-                <span>Dataset အား upload လုပ်ရန်</span>
-                <span class="card-hint">YOLOv8 format ဖြင့် export လုပ်ထားသော ZIP (Roboflow export)</span>
-              </div>
-              <form id="uploadForm" class="upload-form">
-                <label class="file-picker" for="zipFile">
-                  <input type="file" id="zipFile" accept=".zip" required />
-                  <span class="file-picker-icon">📦</span>
-                  <span id="zipFileName" class="file-picker-text">ZIP ဖိုင်ကိုရွေးပါ သို့မဟုတ် drag &amp; drop လုပ်ပါ</span>
-                </label>
-                <div class="row">
-                  <label class="field field-expand">
-                    <span>Dataset အမည်</span>
-                    <input type="text" id="datasetName" placeholder="ဥပမာ myanmar_objects" />
-                  </label>
-                  <button type="submit" class="btn btn-ghost" id="uploadBtn">Upload လုပ်မည်</button>
-                </div>
-                <div id="uploadMsg" class="inline-msg"></div>
-              </form>
-            </div>
-
-            <div class="card card-datasets">
-              <div class="card-title">
-                <span>ရရှိနိုင်သော Dataset များ</span>
-                <button class="btn btn-tiny" id="refreshDatasets">Refresh</button>
-              </div>
-              <div id="datasetsList" class="datasets-list">
-                <div class="muted">Loading datasets...</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="sub-col">
-            <div class="card card-config">
-              <div class="card-title">
-                <span>Training Configuration</span>
-              </div>
-              <div class="grid-config">
-                <label class="field">
-                  <span>Base Model</span>
-                  <select id="baseModel">
-                    <option value="yolov8n.pt">yolov8n.pt (nano, အလျင်မြန်ဆုံး)</option>
-                    <option value="yolov8s.pt">yolov8s.pt (small)</option>
-                    <option value="yolov8m.pt">yolov8m.pt (medium)</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>Run Name</span>
-                  <input type="text" id="runName" value="visionsync_custom" />
-                </label>
-                <label class="field">
-                  <span>Epochs</span>
-                  <input type="number" id="epochs" value="50" min="1" max="500" step="1" />
-                </label>
-                <label class="field">
-                  <span>Image Size (imgsz)</span>
-                  <input type="number" id="imgSize" value="640" min="320" max="1280" step="32" />
-                </label>
-                <label class="field">
-                  <span>Batch Size</span>
-                  <input type="number" id="batchSize" value="16" min="1" max="128" step="1" />
-                </label>
-                <label class="field field-expand">
-                  <span>data.yaml Path (auto-fill)</span>
-                  <input type="text" id="dataYaml" placeholder="dataset/<name>/data.yaml" />
-                </label>
-              </div>
-
-              <div class="action-row">
-                <button id="startBtn" class="btn btn-primary">🚀 စတင်လေ့လာမည်</button>
-                <button id="stopBtn" class="btn btn-danger" disabled>⏹️ ရပ်ဆိုင်းမည်</button>
-              </div>
-            </div>
-
-            <div class="card card-status">
-              <div class="card-title">
-                <span>Training အခြေအနေ</span>
-                <span id="durationText" class="card-hint">00:00:00</span>
-              </div>
-              <div class="progress-wrap">
-                <div class="progress-bar" data-pct="0">
-                  <div id="progressFill" class="progress-fill"></div>
-                </div>
-              </div>
-              <div id="statusLine" class="status-line">ကျေးဇူးပြု၍ dataset တစ်ခုရွေးပြီး Start နှိပ်ပါ။</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ===================== MASTER BUILDER TAB ===================== -->
-      <div class="tab-panel" data-panel="master" hidden>
+      <div class="tab-panel" data-panel="master">
         <div class="sub-grid">
           <div class="sub-col">
             <div class="card card-master-info">

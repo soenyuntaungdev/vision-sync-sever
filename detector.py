@@ -8,65 +8,90 @@ from PIL import Image
 logger = logging.getLogger("visionsync")
 logging.basicConfig(level=logging.INFO)
 
-# Maximum image dimension kept before YOLO inference (frames are typically
-# far larger than this; the model downsamples to 640 internally anyway).
-MAX_INFER_DIM = 1280
+# Maximum image dimension for YOLO inference. YOLO natively processes at 640px;
+# passing larger frames wastes compute without accuracy gain.
+MAX_INFER_DIM = 640
 
-# Mode filtering definitions matching constants/modes.ts in VisionSync app
+# Mode filtering definitions matching constants/modes.ts in VisionSync app.
+# Each set includes both COCO-style names AND LVIS-style names (underscore/parentheses
+# variants) so that filtering works regardless of the loaded model's naming convention.
 MODE_CLASSES: Dict[str, Optional[Set[str]]] = {
-    "general": None,  # All classes
+    "general": None,  # All 601 Open Images v7 classes (no filter)
     "security": {
+        # People & personal items
         "person",
         "backpack",
-        "handbag",
-        "suitcase",
-        "knife",
+        "handbag", "handbag_(purse)",
+        "suitcase", "suitcase_(luggage)",
+        # Weapons / tools
+        "knife", "knife_(kitchen_utensil)",
         "scissors",
-        "cell phone",
-        "car",
-        "motorcycle",
+        # Electronics
+        "cell phone", "cellular_telephone", "mobile_phone",
+        # Vehicles
+        "car", "car_(automobile)",
+        "motorcycle", "motorbike",
         "bicycle",
-        "truck",
-        "bus",
+        "truck", "truck_(vehicle)",
+        "bus", "bus_(vehicle)",
     },
     "industrial": {
-        "truck",
-        "bus",
+        # Heavy vehicles
+        "truck", "truck_(vehicle)",
+        "bus", "bus_(vehicle)",
         "train",
+        # Furniture / fixtures
         "bench",
         "chair",
+        # Tools
         "scissors",
-        "knife",
-        "oven",
-        "microwave",
+        "knife", "knife_(kitchen_utensil)",
+        # Appliances
+        "oven", "oven_(kitchen_appliance)",
+        "microwave", "microwave_oven",
         "toaster",
         "refrigerator",
-        "laptop",
-        "keyboard",
+        # Electronics / equipment
+        "laptop", "laptop_computer",
+        "keyboard", "computer_keyboard",
         "bottle",
-        "fire hydrant",
+        "fire hydrant", "fire_hydrant",
     },
 }
 
 class ObjectDetector:
     """
-    Ultralytics YOLOv8 object detector with automatic fallback to mock/synthetic
-    detections if model weights are unavailable or if PyTorch/Ultralytics is absent.
+    Ultralytics YOLO object detector supporting COCO (80 classes) and Open Images
+    v7 (601 classes) pretrained weights. Falls back to mock/synthetic detections
+    automatically if model weights are unavailable or PyTorch/Ultralytics is absent.
     """
 
-    def __init__(self, model_name: str = "yolov8n.pt"):
+    def __init__(self, model_name: str = "yolov8n-oiv7.pt"):
         self.model_name = model_name
         self.model = None
         self.use_fallback = False
+        self.load_error: Optional[str] = None
+        self.model_classes: Optional[List[str]] = None
         self._load_model()
 
     def _load_model(self):
+        self.load_error = None
+        self.model_classes = None
         try:
             from ultralytics import YOLO
-            logger.info(f"Loading YOLOv8 model: {self.model_name}...")
+            logger.info(f"Loading YOLO model: {self.model_name}...")
             self.model = YOLO(self.model_name)
-            logger.info("YOLOv8 model loaded successfully!")
+            try:
+                names_attr = getattr(self.model.model, "names", {})
+                if isinstance(names_attr, list):
+                    self.model_classes = [str(n) for n in names_attr]
+                elif isinstance(names_attr, dict):
+                    self.model_classes = [str(names_attr[i]) for i in sorted(names_attr.keys())]
+            except Exception:
+                pass
+            logger.info(f"YOLO model loaded successfully! Classes: {len(self.model_classes) if self.model_classes else '?'}")
         except Exception as e:
+            self.load_error = str(e)
             logger.warning(f"Could not load Ultralytics YOLO model ({e}). Using smart fallback detector.")
             self.use_fallback = True
 
@@ -108,9 +133,6 @@ class ObjectDetector:
 
         if not self.use_fallback and self.model is not None:
             try:
-                # Downscale huge phone frames before inference: YOLO resizes to
-                # 640 internally anyway, so we only pay the numpy cost once and
-                # avoid very large allocations.
                 if max(image.size) > MAX_INFER_DIM:
                     ratio = MAX_INFER_DIM / max(image.size)
                     image = image.resize(
@@ -118,25 +140,29 @@ class ObjectDetector:
                         Image.LANCZOS,
                     )
                 img_w, img_h = image.size
-                # Convert PIL image to numpy array for YOLO
                 img_np = np.array(image)
-                results = self.model.predict(img_np, conf=conf_threshold, verbose=False)
-                
+                results = self.model.predict(
+                    img_np,
+                    conf=conf_threshold,
+                    imgsz=640,   # native YOLO resolution — fastest inference
+                    verbose=False,
+                )
+
                 detections = []
                 for result in results:
                     boxes = result.boxes
-                    # Custom-trained model (class names များသည် COCO/MODE filter နှင့် မဆိုင်လျှင်)
-                    # mode filter ကြောင့် အားလုံးပျောက်မသွားစေရန် filter ကို ဖွင့်ထားမည်
-                    if allowed_classes is not None and result.names:
-                        model_classes = set(result.names.values())
-                        if model_classes and not (model_classes & allowed_classes):
+                    model_classes_set: Optional[set] = None
+                    if result.names:
+                        model_classes_set = set(result.names.values())
+                    if allowed_classes is not None and model_classes_set:
+                        custom_classes = model_classes_set - allowed_classes
+                        if custom_classes:
                             allowed_classes = None
                     for box in boxes:
                         cls_id_num = int(box.cls[0].item())
                         cls_name = result.names.get(cls_id_num, f"class_{cls_id_num}")
                         confidence = float(box.conf[0].item())
 
-                        # Filter by mode if applicable
                         if allowed_classes is not None and cls_name not in allowed_classes:
                             continue
 

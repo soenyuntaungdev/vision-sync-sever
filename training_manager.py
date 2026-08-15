@@ -1,11 +1,13 @@
 import io
+import logging
 import os
+import re
 import shutil
 import sys
 import threading
 import time
 import zipfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dataset_utils import fixup_dataset, preflight_check_training
 
@@ -38,6 +40,25 @@ def _main_globals() -> Dict[str, Any]:
     return mod.__dict__
 
 
+class _TrainingLogHandler(logging.Handler):
+    def __init__(self, log_buffer: List[str], real_out: Any):
+        super().__init__()
+        self.log_buffer = log_buffer
+        self._real = real_out
+
+    def emit(self, record: Any) -> None:
+        try:
+            msg = self.format(record)
+            self.log_buffer.append(msg)
+            try:
+                self._real.write(msg + "\n")
+                self._real.flush()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
 class TrainingLogCapture(io.StringIO):
     def __init__(self, log_buffer: List[str]):
         super().__init__()
@@ -49,11 +70,20 @@ class TrainingLogCapture(io.StringIO):
         stripped = s.rstrip("\n")
         if stripped:
             self.log_buffer.append(stripped)
+        try:
+            if self._stdout:
+                self._stdout.write(s)
+                self._stdout.flush()
+        except Exception:
+            pass
         return len(s)
 
     def flush(self) -> None:
         if self._stdout:
-            self._stdout.flush()
+            try:
+                self._stdout.flush()
+            except Exception:
+                pass
 
 
 class TrainingManager:
@@ -164,7 +194,8 @@ class TrainingManager:
             import re
             m = re.search(r"ObjectDetector\(model_name=[\"']([^\"']+)[\"']\)", content)
             if m:
-                return m.group(1)
+                raw = m.group(1)
+                return raw.replace("\\", "/")
         except Exception:
             pass
         return None
@@ -196,41 +227,74 @@ class TrainingManager:
 
         reloaded = False
         reload_msg = ""
+        new_detector = None
         try:
             import detector as _detector_mod
-            from detector import ObjectDetector
             import importlib
             importlib.reload(_detector_mod)
+            from detector import ObjectDetector
             if "detector" in _main_globals():
                 prev = _main_globals()["detector"]
-                try:
-                    new_detector = ObjectDetector(model_name=full if not os.path.isabs(full) else full)
-                    new_detector = ObjectDetector(model_name=model_path)
+                prev_name = getattr(prev, "model_name", "?")
+                load_err: Optional[str] = None
+                fsize = os.path.getsize(full) if os.path.isfile(full) else 0
+
+                def _try_load(try_name: str) -> Tuple[Optional["ObjectDetector"], Optional[str]]:
                     try:
-                        new_detector = ObjectDetector(model_name=full)
-                    except Exception:
-                        pass
-                except Exception:
-                    try:
-                        new_detector = ObjectDetector(model_name=model_path)
-                    except Exception as ee2:
-                        return {
-                            "ok": False,
-                            "error": f"New model load မအောင်မြင်ပါ: {ee2}",
-                        }
+                        det = ObjectDetector(model_name=try_name)
+                        le = getattr(det, "load_error", None)
+                        if not le and getattr(det, "use_fallback", False):
+                            le = "Unknown load error (fallback mode activated)"
+                        return det, le
+                    except Exception as ee:
+                        return None, str(ee)
+
+                # Try 1: absolute path
+                new_detector, load_err = _try_load(full)
+                # Try 2: relative path (model_path as-is, some YOLO versions prefer this)
+                if (load_err or new_detector is None or getattr(new_detector, "use_fallback", False)) and model_path and model_path != full:
+                    det2, le2 = _try_load(model_path)
+                    if (not le2) and det2 is not None and (not getattr(det2, "use_fallback", False)):
+                        new_detector, load_err = det2, le2
+
+                # If still failing, bail out with a detailed error
+                if load_err or new_detector is None or getattr(new_detector, "use_fallback", False):
+                    real_err = load_err or (
+                        "Fallback mode ကို auto အသုံးပြုနေပါတယ် — YOLO က .pt ကို ဖတ်မလို့ရပါဘူး"
+                    )
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"Model (.pt) load မအောင်မြင်ပါ။ File: {model_path} | "
+                            f"Size: {fsize} bytes | "
+                            f"Error: {real_err}.\n"
+                            f"  ဖြစ်နိုင်ခြေများ —\n"
+                            f"  (၁) Ultralytics/PyTorch မတပ်ဆင်ရသေးပါ\n"
+                            f"  (၂) .pt ဖိုင် ပျက်စီးနေသည် (Corrupted)\n"
+                            f"  (၃) YOLO version ကွဲပြားမှုကြောင့် ဖိုင် format မကိုက်ညီပါ\n"
+                            f"  (၄) model ထဲရှိ classes count နှင့် dataset nc ကိုက်ညီမှု မရှိပါ"
+                        ),
+                    }
+
                 _main_globals()["detector"] = new_detector
                 reloaded = True
-                reload_msg = f' (Live reload: {getattr(prev, "model_name", "?")} → {new_detector.model_name}, fallback={new_detector.use_fallback})'
+                nc = len(new_detector.model_classes) if new_detector.model_classes else 0
+                reload_msg = (
+                    f' (Live reload: {prev_name} → {new_detector.model_name}, '
+                    f'classes={nc}, fallback={new_detector.use_fallback})'
+                )
         except Exception as ee:
             reload_msg = f" (Live reload မအောင်မြင်၊ manual restart လိုပါမယ် — {ee})"
 
+        result_msg = f"✅ Activated model: {model_path}"
+        if wrote_changes:
+            result_msg += " · main.py saved + live reload သွင်းပြီးပါပြီ"
+        else:
+            result_msg += " · main.py မှာ ObjectDetector line မတွေ့လို့ live reload သာလုပ်ခဲ့ပါတယ် (restart လုပ်မှ အမြဲတမ်းမသိမ်းပါ)"
+        result_msg += reload_msg
         return {
             "ok": True,
-            "message": (
-                f"Activated model: {model_path}"
-                + ("" if wrote_changes else " (main.py မှာ line မတွေ့လို့ live reload သာလုပ်ခဲ့ပါတယ်)")
-                + reload_msg
-            ),
+            "message": result_msg,
         }
 
     def extract_uploaded_zip(self, zip_filepath: str, dataset_name: str) -> Dict[str, Any]:
@@ -334,6 +398,53 @@ class TrainingManager:
             old_stderr = sys.stderr
             sys.stdout = log_capture
             sys.stderr = log_capture
+
+            # Also hook python logging so Ultralytics logs appear in Live Logs
+            old_root_level: Optional[int] = logging.root.level
+            old_root_handlers: List[Any] = list(logging.root.handlers)
+            log_handler: Optional[_TrainingLogHandler] = _TrainingLogHandler(self.logs, old_stdout)
+            log_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s: %(message)s"))
+            for h in old_root_handlers:
+                logging.root.removeHandler(h)
+            logging.root.addHandler(log_handler)
+            logging.root.setLevel(logging.INFO)
+            try:
+                for mod_name in ("ultralytics", "yolo"):
+                    mod_log = logging.getLogger(mod_name)
+                    mod_log.addHandler(log_handler)
+                    mod_log.setLevel(logging.INFO)
+                    mod_log.propagate = True
+            except Exception:
+                pass
+
+            # Backup progress: parse log lines like "Epoch 3/50" if callback fails
+            _epoch_re_1 = re.compile(r"Epoch\s+(\d+)\/(\d+)", re.IGNORECASE)
+            _epoch_re_2 = re.compile(r"(\d+)\/(\d+)\s*epochs?", re.IGNORECASE)
+            _tgt_epochs = max(1, epochs)
+            def _parse_log_progress(line: Any) -> None:
+                try:
+                    if not isinstance(line, str):
+                        return
+                    m = _epoch_re_1.search(line) or _epoch_re_2.search(line)
+                    if m:
+                        ep = int(m.group(1))
+                        tot = int(m.group(2))
+                        if tot > 0 and ep > 0:
+                            pct = int(min(100, (ep / max(1, tot)) * 100))
+                            if pct > self.progress:
+                                self.progress = pct
+                    low = line.lower()
+                    if "results saved to" in low or "training complete" in low or "best.pt" in low:
+                        self.progress = max(self.progress, 95)
+                except Exception:
+                    pass
+            _orig_append = self.logs.append
+            def _wrapped_append(item: Any) -> None:
+                _orig_append(item)
+                _parse_log_progress(item)
+            self.logs.append = _wrapped_append  # type: ignore[assignment]
+            _log_cleanup_done = [False]
+
             try:
                 self.logs.append(f"[VisionSync] Starting training: {run_name}")
                 self.logs.append(f"  data_yaml = {yaml_path}")
@@ -413,6 +524,21 @@ class TrainingManager:
                 self.finished_at = time.time()
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
+                if not _log_cleanup_done[0]:
+                    _log_cleanup_done[0] = True
+                    try:
+                        if log_handler is not None:
+                            logging.root.removeHandler(log_handler)
+                        for h in old_root_handlers:
+                            logging.root.addHandler(h)
+                        if old_root_level is not None:
+                            logging.root.setLevel(old_root_level)
+                    except Exception:
+                        pass
+                    try:
+                        self.logs.append = _orig_append  # type: ignore[assignment]
+                    except Exception:
+                        pass
 
         self._thread = threading.Thread(target=runner, args=(config, data_yaml_path), daemon=True)
         self._thread.start()

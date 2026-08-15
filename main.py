@@ -41,7 +41,7 @@ os.makedirs(TRAINING_UI_DIR, exist_ok=True)
 if os.path.isdir(TRAINING_UI_DIR):
     app.mount("/training/assets", StaticFiles(directory=TRAINING_UI_DIR), name="training_assets")
 
-detector = ObjectDetector(model_name="yolov8n.pt")
+detector = ObjectDetector(model_name="yolov8n-oiv7.pt")
 training_manager = TrainingManager()
 
 REPORTS_FILE = os.path.join(BACKEND_DIR, "reports_log.json")
@@ -156,30 +156,89 @@ _master_finetune_state: Dict[str, Any] = {
 
 def _master_finetune_run(continuous_finetune_fn: Any) -> None:
     """Run continuous_finetune in background with live progress + logs wired to state."""
+    import re as _re
+
+    epoch_regex_1 = _re.compile(r"Epoch\s+(\d+)\/(\d+)", _re.IGNORECASE)
+    epoch_regex_2 = _re.compile(r"(\d+)\/(\d+)\s*epochs?", _re.IGNORECASE)
+    total_epochs_from_config: int = int(_master_finetune_state.get("total_epochs") or 0)
+
     def _on_progress(epoch: int, total: int) -> None:
-        _master_finetune_state["current_epoch"] = epoch
-        _master_finetune_state["total_epochs"] = total
-        _master_finetune_state["progress"] = int(min(100, (epoch / max(1, total)) * 100))
+        nonlocal total_epochs_from_config
+        if total and total > 0:
+            total_epochs_from_config = int(total)
+            _master_finetune_state["total_epochs"] = total_epochs_from_config
+        if epoch and epoch > 0:
+            _master_finetune_state["current_epoch"] = epoch
+            _master_finetune_state["progress"] = int(min(100, (epoch / max(1, total_epochs_from_config)) * 100))
 
     def _on_log(line: str) -> None:
         _master_finetune_state["logs"].append(line)
+        try:
+            low = line.lower()
+            # Backup: parse epoch progress from Ultralytics log lines
+            # Matches: "Epoch 3/20", " 3/20 Epochs completed", "Epoch: 5 / 10" etc.
+            m = epoch_regex_1.search(line) or epoch_regex_2.search(line)
+            if m:
+                ep = int(m.group(1))
+                tot = int(m.group(2))
+                if tot > 0:
+                    nonlocal total_epochs_from_config
+                    if not total_epochs_from_config or total_epochs_from_config <= 0:
+                        total_epochs_from_config = tot
+                    if _master_finetune_state["total_epochs"] <= 0:
+                        _master_finetune_state["total_epochs"] = tot
+                    if ep > 0:
+                        _master_finetune_state["current_epoch"] = max(
+                            _master_finetune_state["current_epoch"] or 0, ep
+                        )
+                        pct = int(min(100, (ep / max(1, _master_finetune_state["total_epochs"] or tot)) * 100))
+                        if pct > _master_finetune_state["progress"]:
+                            _master_finetune_state["progress"] = pct
+            # Finishing lines
+            if "results saved to" in low or "training complete" in low or "best.pt" in low:
+                _master_finetune_state["progress"] = max(_master_finetune_state["progress"], 95)
+        except Exception:
+            pass
 
     _master_finetune_state["logs"].append("🚀 Continuous Fine-Tuning စတင်နေပါသည်...")
+    _master_finetune_state["logs"].append(
+        f"ℹ️  Base model: {_master_finetune_state.get('base_model_display') or '(unknown)'} | "
+        f"Target epochs: {total_epochs_from_config}"
+    )
+
+    def _to_rel(p: Optional[str]) -> Optional[str]:
+        if not p:
+            return p
+        try:
+            if os.path.isabs(p):
+                return os.path.relpath(p, BACKEND_DIR).replace("\\", "/")
+            return p.replace("\\", "/")
+        except Exception:
+            return p
+
     try:
         res = continuous_finetune_fn(on_log=_on_log, on_progress=_on_progress)
+        bp_rel = _to_rel(res.get("best_pt"))
+        ap_rel = _to_rel(res.get("archived_pt"))
         _master_finetune_state.update({
             "status": "ok" if res["ok"] else "error",
             "message": res["message"],
-            "best_pt": res.get("best_pt"),
-            "archived_pt": res.get("archived_pt"),
+            "best_pt": bp_rel,
+            "archived_pt": ap_rel,
             "total_nc": res.get("total_nc", 0),
             "names": res.get("names", []),
             "finished_at": int(time.time() * 1000),
+            "progress": 100 if res["ok"] else _master_finetune_state["progress"],
         })
-        if not res.get("ok"):
-            _on_log(f"❌ {res['message']}")
+        if res.get("ok"):
+            _on_log("✅ " + (res.get("message") or "Training ပြီးဆုံးပါသည်။"))
+        else:
+            _on_log(f"❌ {res.get('message', 'မအောင်မြင်ပါ။')}")
     except Exception as e:
-        _on_log(f"❌ Unexpected error: {e}")
+        import traceback as _tb
+        _on_log("❌ Unexpected error: " + str(e))
+        for ln in _tb.format_exc().splitlines():
+            _on_log(ln)
         _master_finetune_state.update({
             "status": "error",
             "message": f"Unexpected error: {e}",
@@ -208,6 +267,14 @@ def health_check():
         "model_loaded": not detector.use_fallback,
         "model_name": detector.model_name,
         "current_active_model": training_manager.current_model(),
+        "use_fallback": detector.use_fallback,
+        "model_load_error": detector.load_error,
+        "model_class_count": len(detector.model_classes) if detector.model_classes else 0,
+        "model_classes_sample": (
+            detector.model_classes[:5] + ["..."] + detector.model_classes[-5:]
+            if detector.model_classes and len(detector.model_classes) > 12
+            else (detector.model_classes or [])
+        ),
         "timestamp": int(time.time()),
     }
 
@@ -576,6 +643,8 @@ def master_start_finetune(req: ContinueFinetuneRequest):
     if not merge_res["ok"]:
         raise HTTPException(status_code=500, detail=f"Dataset merge မအောင်မြင်ပါ: {merge_res['message']}")
 
+    base_display = req.base_model
+
     def _runner() -> None:
         _master_finetune_state.update({
             "status": "running",
@@ -590,6 +659,7 @@ def master_start_finetune(req: ContinueFinetuneRequest):
             "total_epochs": int(req.epochs),
             "started_at": int(time.time() * 1000),
             "finished_at": None,
+            "base_model_display": base_display,
         })
         _master_finetune_run(lambda **cb: continuous_finetune(
             base_model_path=base_pt,
@@ -642,7 +712,9 @@ def master_start_direct_finetune(req: DirectFinetuneRequest):
     _ensure_master_structure(MASTER_DIR)
     master_yaml = _os.path.join(MASTER_DIR, "data.yaml")
 
-    def _runner() -> None:
+    base_display_direct = req.base_model
+
+    def _runner_direct() -> None:
         _master_finetune_state.update({
             "status": "running",
             "message": "Dataset များ merge ပြီးသားဖြစ်ပါသည်။ Fine-tuning စတင်နေပါသည်...",
@@ -656,6 +728,7 @@ def master_start_direct_finetune(req: DirectFinetuneRequest):
             "total_epochs": int(req.epochs),
             "started_at": int(time.time() * 1000),
             "finished_at": None,
+            "base_model_display": base_display_direct,
         })
         _master_finetune_run(lambda **cb: continuous_finetune(
             base_model_path=base_pt,
@@ -668,7 +741,7 @@ def master_start_direct_finetune(req: DirectFinetuneRequest):
             **cb,
         ))
 
-    t = threading.Thread(target=_runner, daemon=True)
+    t = threading.Thread(target=_runner_direct, daemon=True)
     t.start()
 
     return {
