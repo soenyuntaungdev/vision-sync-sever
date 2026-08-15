@@ -22,7 +22,6 @@ from training_manager import (
     TrainingManager,
     read_active_model,
 )
-from vlm_assistant import VLMAssistant
 
 app = FastAPI(
     title="VisionSync AI Backend Server",
@@ -47,7 +46,6 @@ if os.path.isdir(TRAINING_UI_DIR):
 # ßÇñßÇößÇèßÇ║ßÇ╕ßÇûßÇ╝ßÇäßÇ╖ßÇ║ activate ßÇ£ßÇ»ßÇòßÇ║ßÇæßÇ¼ßÇ╕ßÇ₧ßÇ▒ßÇ¼ model ßÇ₧ßÇèßÇ║ server restart ßÇòßÇ╝ßÇ«ßÇ╕ßÇ£ßÇèßÇ║ßÇ╕ ßÇåßÇÇßÇ║ßÇíßÇ₧ßÇÇßÇ║ßÇ¥ßÇäßÇ║ßÇößÇ▒ßÇÖßÇèßÇ║ßüï
 detector = ObjectDetector(model_name=read_active_model())
 training_manager = TrainingManager()
-vlm_assistant = VLMAssistant()
 
 REPORTS_FILE = os.path.join(BACKEND_DIR, "reports_log.json")
 
@@ -89,8 +87,6 @@ class DetectionItem(BaseModel):
 
 class DetectResponse(BaseModel):
     detections: List[DetectionItem]
-    description: Optional[str] = None
-    engine: Optional[str] = "Google Gemini Vision"
 
 
 class ReportRequest(BaseModel):
@@ -106,13 +102,6 @@ class ActivateModelRequest(BaseModel):
     model_path: str
 
 
-class VLMDescribeRequest(BaseModel):
-    image: str = Field(..., description="Base64 encoded image frame")
-
-
-class VLMQueryRequest(BaseModel):
-    image: str = Field(..., description="Base64 encoded image frame")
-    question: str = Field(..., description="Natural language question about the image")
 
 
 class AddClassRequest(BaseModel):
@@ -232,68 +221,30 @@ def root():
 def health_check():
     return {
         "status": "ok",
-        "engine": "Google Gemini Vision AI",
-        "gemini_active": vlm_assistant.is_configured,
-        "model_name": "gemini-3.5-flash / gemini-3.7-flash",
-        "features": [
-            "Real-time Multimodal Object Detection (/detect)",
-            "Myanmar Natural Language Scene Description (/vlm/describe)",
-            "Myanmar Visual Question Answering (/vlm/query)"
-        ],
+        "model_loaded": not detector.use_fallback,
+        "model_name": detector.model_name,
+        "load_error": getattr(detector, "load_error", None),
+        "nc": len(getattr(detector, "class_names", []) or []),
+        "class_names": getattr(detector, "class_names", []) or [],
+        "current_active_model": training_manager.current_model(),
         "timestamp": int(time.time()),
     }
 
 
 @app.post("/detect", response_model=DetectResponse)
 def detect_objects(req: DetectRequest):
-    """
-    Main Object Detection Endpoint powered by Google Gemini Vision.
-    Detects objects, obstacles, and items with normalized bounding boxes.
-    """
     if not req.image:
         raise HTTPException(status_code=400, detail="Image base64 string is required")
-
-    conf_th = 0.35 if req.conf is None else float(req.conf)
 
     try:
-        detections = vlm_assistant.detect_objects(req.image, conf_threshold=conf_th)
-        return {
-            "detections": detections,
-            "engine": "Google Gemini Vision"
-        }
+        detections = detector.detect(
+            image_base64=req.image,
+            mode=req.mode,
+            conf_threshold=0.35 if req.conf is None else float(req.conf),
+        )
+        return {"detections": detections}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gemini Detection failed: {str(e)}")
-
-
-@app.post("/vlm/detect", response_model=DetectResponse)
-def vlm_detect(req: DetectRequest):
-    """
-    Direct Gemini Vision Object Detection Endpoint.
-    Detects objects and returns normalized bounding boxes using Google Gemini Vision.
-    """
-    if not req.image:
-        raise HTTPException(status_code=400, detail="Image base64 string is required")
-    conf_th = 0.35 if req.conf is None else float(req.conf)
-    detections = vlm_assistant.detect_objects(req.image, conf_threshold=conf_th)
-    return {"detections": detections}
-
-
-@app.post("/vlm/describe")
-def vlm_describe(req: VLMDescribeRequest):
-    """
-    Vision-Language Model (VLM) Scene Description Endpoint via Google Gemini Vision.
-    Analyzes the image and returns a natural language description in Myanmar language.
-    """
-    return vlm_assistant.describe_scene(req.image)
-
-
-@app.post("/vlm/query")
-def vlm_query(req: VLMQueryRequest):
-    """
-    Vision-Language Model (VLM) Visual Question Answering (VQA) Endpoint via Google Gemini Vision.
-    Answers any user question about the image in Myanmar language.
-    """
-    return vlm_assistant.ask_question(req.image, req.question)
+        raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
 
 
 @app.post("/reports")
